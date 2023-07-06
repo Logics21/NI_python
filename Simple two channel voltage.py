@@ -12,16 +12,9 @@ import collections
 import pandas as pd
 import itertools
 
-# Get Device name
+# Get list of DAQ device names
 daqSys = nidaqmx.system.System()
 daqList = daqSys.devices.device_names
-
-# daqName = str(daqSys.devices.device_names[0])
-# print(daqName)
-
-# Reset Device
-# daq = nidaqmx.system.Device(daqName)
-# daq.reset_device()
 
 class voltageContinuousInput(tk.Frame):
     
@@ -56,6 +49,7 @@ class voltageContinuousInput(tk.Frame):
         self.inputSettingsFrame.startButton['state'] = 'disabled'
         self.inputSettingsFrame.saveButton['state'] = 'disabled'
         self.inputSettingsFrame.resetButton['state'] = 'disabled'
+        self.inputSettingsFrame.closeButton['state'] = 'disabled'
 
         #Shared flag to alert task if it should stop
         self.continueRunning = True
@@ -93,17 +87,6 @@ class voltageContinuousInput(tk.Frame):
             self.tempData = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
             self.valBuffer1.extend(self.tempData[0])
             self.valBuffer2.extend(self.tempData[1])
-            # self.valBuffer1.extend(self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)[0])
-            # self.valBuffer2.extend(self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)[1])
-            # self.tempData = self.task.read(self.samplesToPlot)
-
-            # self.graphDataFrame.ax1.cla()
-            # self.graphDataFrame.ax1.set_title("Channel 1")
-            # self.graphDataFrame.ax1.plot(self.tempData[0])
-            # self.graphDataFrame.ax2.cla()
-            # self.graphDataFrame.ax2.set_title("Channel 2")
-            # self.graphDataFrame.ax2.plot(self.tempData[1], "r")
-            # self.graphDataFrame.graph.draw()
             
             if(len(self.valBuffer1) >= self.samplesToPlot):
                 self.graphDataFrame.ax1.cla()
@@ -149,6 +132,7 @@ class voltageContinuousInput(tk.Frame):
             self.inputSettingsFrame.startButton['state'] = 'enabled'
             self.inputSettingsFrame.saveButton['state'] = 'enabled'
             self.inputSettingsFrame.resetButton['state'] = 'enabled'
+            self.inputSettingsFrame.closeButton['state'] = 'enabled'
 
 
     def stopTask(self):
@@ -164,7 +148,6 @@ class voltageContinuousInput(tk.Frame):
         self.dataOutput.to_csv(filepath, index=None, sep=';', decimal=",", mode='w')
         
     def resetDevice(self):
-        # print(self.channelSettingsFrame.chosenDaq.get())
         self.daq = nidaqmx.system.Device(self.channelSettingsFrame.chosenDaq.get())
         # Reset DAQ
         self.daq.reset_device()
@@ -182,14 +165,13 @@ class channelSettings(tk.LabelFrame):
 
     def create_widgets(self):
         
-        self.daqList = daqSys.devices.device_names
         self.chosenDaq = tk.StringVar()
-        # self.chosenDaq.set(daqList[0])
+        self.chosenDaq.set(daqList[0])
         
         self.daqSelectionLabel = ttk.Label(self, text="Select DAQ")
         self.daqSelectionLabel.grid(row=0,sticky='w', padx=self.xPadding, pady=(10,0))
         
-        self.daqSelectionMenu = ttk.OptionMenu(self, self.chosenDaq, self.daqList[0], *self.daqList)
+        self.daqSelectionMenu = ttk.OptionMenu(self, self.chosenDaq, daqList[0], *daqList)
         s = ttk.Style()
         s.configure("TMenubutton", background="white")
         # self.daqSelectionMenu.config()
