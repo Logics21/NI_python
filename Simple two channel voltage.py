@@ -6,7 +6,6 @@ import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-# from audioio import write_audio
 import numpy as np
 import collections
 import pandas as pd
@@ -15,6 +14,9 @@ import itertools
 # Get list of DAQ device names
 daqSys = nidaqmx.system.System()
 daqList = daqSys.devices.device_names
+
+if len(daqList) == 0:
+    raise ValueError('No DAQ detected, check connection.')
 
 class voltageContinuousInput(tk.Frame):
     
