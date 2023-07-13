@@ -82,7 +82,7 @@ class voltageContinuousInput(tk.Frame):
         
         if(self.samplesAvailable >= int(self.sampleRate/self.refreshRate)):
             self.tempData = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
-            self.valBuffer1.extend(self.tempData[0])
+            self.valBuffer1.extend(self.tempData)
             
             if(len(self.valBuffer1) >= self.samplesToPlot):
                 self.graphDataFrame.ax1.cla()
