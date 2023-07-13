@@ -1,3 +1,11 @@
+# -*- coding: utf-8 -*-
+"""
+Simple two channel recording program
+Created on Thu Jul 13 16:43:45 2023
+
+@author: Stefan Mucha
+"""
+
 import nidaqmx
 import tkinter as tk
 from tkinter import ttk, filedialog

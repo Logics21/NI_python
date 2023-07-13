@@ -1,15 +1,23 @@
+# -*- coding: utf-8 -*-
+"""
+Simple one channel recording program
+Created on Thu Jul 13 16:43:45 2023
+
+@author: Stefan Mucha
+"""
+
+
 import nidaqmx
 import tkinter as tk
 from tkinter import ttk, filedialog
 import matplotlib
-import matplotlib.backends.tkagg as tkagg
+matplotlib.use("TkAgg")
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
-import pandas as pd
 import collections
+import pandas as pd
 import itertools
-
-matplotlib.use("TkAgg")
 
 # Get list of DAQ device names
 daqSys = nidaqmx.system.System()
@@ -43,11 +51,16 @@ class VoltageContinuousInput(tk.Frame):
         self.graphDataFrame = GraphData(self)
         self.graphDataFrame.grid(row=0, rowspan=2, column=2, pady=(20,0), ipady=10)
 
+
     def start_task(self):
+        # Prevent the user from starting the task a second time
         self.inputSettingsFrame.start_button['state'] = 'disabled'
         self.inputSettingsFrame.save_button['state'] = 'disabled'
         self.inputSettingsFrame.reset_button['state'] = 'disabled'
         self.inputSettingsFrame.close_button['state'] = 'disabled'
+
+        # Shared flag to alert task if it should stop
+        self.continue_running = True
 
         # Get task settings from the user
         physical_channel1 = f"{self.channelSettingsFrame.chosen_daq.get()}/{self.channelSettingsFrame.physical_channel1_entry.get()}"
@@ -58,6 +71,7 @@ class VoltageContinuousInput(tk.Frame):
         self.samples_to_plot = int(float(self.inputSettingsFrame.plot_duration_entry.get()) * self.sample_rate)
         self.number_of_samples = int(self.inputSettingsFrame.recording_duration_entry.get()) * self.sample_rate
         self.val_buffer1 = collections.deque(maxlen=self.number_of_samples)
+        self.val_buffer2 = collections.deque(maxlen=self.number_of_samples)
 
         # Create and start task
         self.task = nidaqmx.Task()
@@ -69,13 +83,13 @@ class VoltageContinuousInput(tk.Frame):
         self.master.after(10, self.run_task)
 
     def run_task(self):
-        # Check if task needs to update the data queue and plot
+        # Check if the task needs to update the data queue and plot
         samples_available = self.task._in_stream.avail_samp_per_chan
-        
+
         if samples_available >= int(self.sample_rate / self.refresh_rate):
             temp_data = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
             self.val_buffer1.extend(temp_data)
-            
+
             if len(self.val_buffer1) >= self.samples_to_plot:
                 self.graphDataFrame.ax1.cla()
                 self.graphDataFrame.ax1.set_title("Channel 1")
@@ -98,7 +112,9 @@ class VoltageContinuousInput(tk.Frame):
             self.inputSettingsFrame.reset_button['state'] = 'enabled'
             self.inputSettingsFrame.close_button['state'] = 'enabled'
 
+
     def stop_task(self):
+        # Callback for the "stop task" button
         self.continue_running = False
 
     def save_data(self):
@@ -123,6 +139,7 @@ class ChannelSettings(tk.LabelFrame):
         self.x_padding = (30, 30)
         self.create_widgets()
 
+
     def create_widgets(self):
         self.chosen_daq = tk.StringVar()
         self.chosen_daq.set(daqList[0])
@@ -131,8 +148,8 @@ class ChannelSettings(tk.LabelFrame):
         self.daq_selection_label.grid(row=0, sticky='w', padx=self.x_padding, pady=(10, 0))
 
         self.daq_selection_menu = ttk.OptionMenu(self, self.chosen_daq, daqList[0], *daqList)
-        style = ttk.Style()
-        style.configure("TMenubutton", background="white")
+        s = ttk.Style()
+        s.configure("TMenubutton", background="white")
         self.daq_selection_menu.grid(row=1, sticky="ew", padx=self.x_padding)
 
         self.physical_channel_label = ttk.Label(self, text="Physical Channel")
@@ -143,18 +160,18 @@ class ChannelSettings(tk.LabelFrame):
         self.physical_channel1_entry.grid(row=3, sticky="ew", padx=self.x_padding)
 
         self.max_voltage_label = ttk.Label(self, text="Max Voltage")
-        self.max_voltage_label.grid(row=4, sticky='w', padx=self.x_padding, pady=(10, 0))
+        self.max_voltage_label.grid(row=5, sticky='w', padx=self.x_padding, pady=(10, 0))
 
         self.max_voltage_entry = ttk.Entry(self)
         self.max_voltage_entry.insert(0, "10")
-        self.max_voltage_entry.grid(row=5, sticky="ew", padx=self.x_padding)
+        self.max_voltage_entry.grid(row=6, sticky="ew", padx=self.x_padding)
 
         self.min_voltage_label = ttk.Label(self, text="Min Voltage")
-        self.min_voltage_label.grid(row=6,  sticky='w', padx=self.x_padding, pady=(10, 0))
+        self.min_voltage_label.grid(row=7, sticky='w', padx=self.x_padding, pady=(10, 0))
 
         self.min_voltage_entry = ttk.Entry(self)
         self.min_voltage_entry.insert(0, "-10")
-        self.min_voltage_entry.grid(row=7, sticky="ew", padx=self.x_padding, pady=(0, 10))
+        self.min_voltage_entry.grid(row=8, sticky="ew", padx=self.x_padding, pady=(0, 10))
 
 
 class InputSettings(tk.LabelFrame):
@@ -219,11 +236,12 @@ class GraphData(tk.Frame):
     def create_widgets(self):
         self.graph_title = ttk.Label(self, text="Voltage Input")
         self.fig = Figure(figsize=(7, 7), dpi=100)
-        self.ax1 = self.fig.add_subplot(2, 1, 1)
+        self.ax1 = self.fig.add_subplot(1, 1, 1)
         self.ax1.set_title("Channel 1")
-        self.graph = tkagg.FigureCanvasTkAgg(self.fig, self)
+        self.graph = FigureCanvasTkAgg(self.fig, self)
         self.graph.draw()
         self.graph.get_tk_widget().pack()
+
 
 # Create the Tkinter class and primary application "VoltageContinuousInput"
 root = tk.Tk()
