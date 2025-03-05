@@ -132,8 +132,8 @@ class AnalysisGUI:
         time_axis = np.arange(total_samples) / sample_rate
         
         # Detrend channels
-        channel_1 = detrend(self.data["ch 1"])
-        channel_2 = detrend(self.data["ch 2"])
+        channel_1 = detrend(self.data["ch1"])
+        channel_2 = detrend(self.data["ch2"])
         
         analysis = self.analysis_type.get()
         

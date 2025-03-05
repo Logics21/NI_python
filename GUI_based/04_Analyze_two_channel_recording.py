@@ -167,8 +167,8 @@ def load_data(self, log_filepath):
         time_axis = np.arange(total_samples) / sample_rate
 
         # Detrend raw data
-        channel_1 = detrend(self.data["ch 1"])
-        channel_2 = detrend(self.data["ch 2"])
+        channel_1 = detrend(self.data["ch1"])
+        channel_2 = detrend(self.data["ch2"])
 
         # Plot raw data
         max_y = max(np.max(channel_1), np.max(channel_2))

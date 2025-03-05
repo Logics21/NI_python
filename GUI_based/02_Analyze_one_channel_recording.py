@@ -2,9 +2,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from tkinter import Tk, filedialog, Button, Checkbutton, IntVar, DoubleVar, Entry, Label, Frame
+from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame #, Checkbutton
 import os
-from scipy.signal import detrend, hilbert, butter, filtfilt
+from scipy.signal import detrend #, hilbert, butter, filtfilt
 
 class AnalysisGUI:
 
@@ -168,7 +168,7 @@ class AnalysisGUI:
         time_axis = np.arange(total_samples) / sample_rate
 
         # Detrend raw data
-        channel_1 = detrend(self.data["ch 1"])
+        channel_1 = detrend(self.data["ch1"])
         # channel_2 = detrend(self.data["ch 1"])
 
         # Plot raw data

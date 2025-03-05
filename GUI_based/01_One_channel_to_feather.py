@@ -133,7 +133,7 @@ class VoltageContinuousInput(tk.Frame):
                     # Save data to a file
                     time_vec = np.arange(0, len(self.val_buffer1) / (self.sample_rate / 1000), 1000 / self.sample_rate)
                     data_output = np.vstack((time_vec, self.val_buffer1)).T
-                    data_output = pd.DataFrame(data_output, columns=["Time_ms", "ch 1"])
+                    data_output = pd.DataFrame(data_output, columns=["Time_ms", "ch1"])
                     # data_output.to_csv(self.filepath+"csv", index=None, sep=';', decimal=",", mode='w')
                     feather.write_feather(data_output, self.filepath)
                     self.save_log_file()
