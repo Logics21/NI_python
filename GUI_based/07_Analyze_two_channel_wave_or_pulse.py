@@ -15,13 +15,13 @@ class AnalysisGUI:
         self.root.title("Data Analysis Tool")
         
         # GUI variables
-        self.threshold = DoubleVar(value=0.00)
+        self.threshold = DoubleVar(value=0.10)
         self.min_y = DoubleVar(value=200)
         self.max_y = DoubleVar(value=2000)
         self.nfft = IntVar(value=13)  # Default NFFT exponent
         self.noverlap = IntVar(value=10)  # Default noverlap exponent
         self.pulse_window = DoubleVar(value=0.01)  # Pulse window in seconds (for pulse-type)
-        self.analysis_type = StringVar(value="wave")  # "wave" or "pulse"
+        self.analysis_type = StringVar(value="pulse")  # "wave" or "pulse"
         self.log_data = None
         self.data = None
         self.mean_pulse_form = None  # To store computed mean pulse form
@@ -178,62 +178,49 @@ class AnalysisGUI:
         elif analysis == "pulse":
             # Pulse-type analysis
             # Use channel_1 for pulse detection
-            peaks, properties = find_peaks(channel_1, height=self.threshold.get())
+            peaks_1, properties_1 = find_peaks(channel_1, height=self.threshold.get(), distance = 50)
+            peaks_2, properties_2 = find_peaks(channel_2, height=self.threshold.get(), distance = 50)
             
             # Plot raw data with detected peaks
             self.axes[0].plot(time_axis, channel_1, label="Ch 1")
-            self.axes[0].plot(time_axis[peaks], channel_1[peaks], "rx", label="Peaks")
+            self.axes[0].plot(time_axis[peaks_1], channel_1[peaks_1], "rx", label="Peaks")
+            self.axes[0].plot(time_axis, channel_2 + 2*max_y_val, label="Ch 2")
+            self.axes[0].plot(time_axis[peaks_2], channel_1[peaks_2], "rx", label="Peaks")
+
+
             self.axes[0].set_title(f"Raw Data with Detected Peaks - Recording ID: {rec_id}")
             self.axes[0].set_ylabel("Amplitude")
             self.axes[0].legend(loc="lower left")
             
             # Compute inter-pulse intervals and instantaneous rate
-            if len(peaks) > 1:
-                peak_times = time_axis[peaks]
-                dt = np.diff(peak_times)
-                inst_rate = 1.0 / dt
-                mid_times = (peak_times[:-1] + peak_times[1:]) / 2
+            if len(peaks_1) > 1:
+                peak_times_1 = time_axis[peaks_1]
+                dt_1 = np.diff(peak_times_1)
+                inst_rate_1 = 1.0 / dt_1
+                mid_times_1 = (peak_times_1[:-1] + peak_times_1[1:]) / 2
                 
-                self.axes[1].plot(mid_times, inst_rate, 'o')
-                self.axes[1].set_title("Instantaneous Pulse Rate")
+                peak_times_2 = time_axis[peaks_2]
+                dt_2 = np.diff(peak_times_2)
+                inst_rate_2 = 1.0 / dt_2
+                mid_times_2 = (peak_times_2[:-1] + peak_times_2[1:]) / 2
+                
+                self.axes[1].plot(mid_times_1, inst_rate_1, 'o')
+                self.axes[1].set_title("Instantaneous Pulse Rate Ch 1")
                 self.axes[1].set_ylabel("Rate (Hz)")
                 self.axes[1].set_xlabel("Time (s)")
                 
-                self.axes[2].plot(mid_times, dt, 'o')
-                self.axes[2].set_title("Inter-Pulse Intervals")
-                self.axes[2].set_ylabel("Interval (s)")
+                self.axes[2].plot(mid_times_2, inst_rate_2, 'o')
+                self.axes[2].set_title("Instantaneous Pulse Rate Ch 2")
+                self.axes[2].set_ylabel("Rate (Hz)")
                 self.axes[2].set_xlabel("Time (s)")
+
             else:
                 self.axes[1].text(0.5, 0.5, "Not enough peaks detected", ha="center")
                 self.axes[2].text(0.5, 0.5, "Not enough peaks detected", ha="center")
             
-            # Extract pulse segments for mean pulse form
-            window_samples = int(self.pulse_window.get() * sample_rate)
-            half_window = window_samples // 2
-            segments = []
-            for peak in peaks:
-                if peak - half_window >= 0 and peak + half_window < len(channel_1):
-                    segment = channel_1[peak - half_window: peak + half_window]
-                    norm_factor = np.max(np.abs(segment))
-                    if norm_factor != 0:
-                        segment = segment / norm_factor
-                    segments.append(segment)
-            if segments:
-                segments = np.array(segments)
-                self.mean_pulse_form = np.mean(segments, axis=0)
-                t_segment = np.linspace(-self.pulse_window.get()/2, self.pulse_window.get()/2, window_samples)
-                # Overlay all pulse segments
-                for seg in segments:
-                    self.axes[3].plot(t_segment, seg, color="gray", alpha=0.5)
-                # Plot mean pulse form in red
-                self.axes[3].plot(t_segment, self.mean_pulse_form, color="red", linewidth=2, label="Mean Pulse Form")
-                self.axes[3].set_title("Pulse Overlays & Mean Pulse Form")
-                self.axes[3].set_xlabel("Time (s)")
-                self.axes[3].legend(loc="upper right")
-            else:
-                self.axes[3].text(0.5, 0.5, "No valid pulse segments found", ha="center")
             
             # Turn off the 5th subplot if not used
+            self.axes[3].axis('off')
             self.axes[4].axis('off')
         
         self.fig.tight_layout()
@@ -261,7 +248,7 @@ class AnalysisGUI:
             df = pd.DataFrame(self.mean_pulse_form, columns=["Amplitude"])
             # Optionally add a time column based on pulse window
             window_samples = len(self.mean_pulse_form)
-            sample_rate = int(self.log_data["Sample Rate"])
+            # sample_rate = int(self.log_data["Sample Rate"])
             t = np.linspace(-self.pulse_window.get()/2, self.pulse_window.get()/2, window_samples)
             df.insert(0, "Time (s)", t)
             df.to_csv(save_path, index=False)
