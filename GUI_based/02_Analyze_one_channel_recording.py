@@ -7,11 +7,11 @@ import os
 from scipy.signal import detrend, hilbert, butter, filtfilt
 
 class AnalysisGUI:
-    
+
     def __init__(self, root):
         self.root = root
         self.root.title("Data Analysis Tool")
-        
+
         # GUI variables
         self.threshold = DoubleVar(value=0.00)
         self.min_y = DoubleVar(value=200)
@@ -55,21 +55,41 @@ class AnalysisGUI:
             self.log_data, self.data = self.load_data(filepath)
             self.refresh_plot()
 
+    # def load_data(self, log_filepath):
+    #     """Load log file and associated data file."""
+    #     with open(log_filepath, 'r') as file:
+    #         log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
+    #
+    #     # data_filepath = log_data['Path to Datafile']
+    #     data_filepath = log_filepath.split('log_')[0]+log_filepath.split('log_')[-1].split('.')[0]+'.feather'
+    #
+    #     if not os.path.exists(data_filepath):
+    #         raise FileNotFoundError(f"Data file not found at: {data_filepath}")
+    #
+    #     data = pd.read_feather(data_filepath)
+    #     return log_data, data
+
     def load_data(self, log_filepath):
         """Load log file and associated data file."""
         with open(log_filepath, 'r') as file:
             log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
 
-        # data_filepath = log_data['Path to Datafile']
-        data_filepath = log_filepath.split('log_')[0]+log_filepath.split('log_')[-1].split('.')[0]+'.feather'
+        base_filepath = log_filepath.split('log_')[0] + log_filepath.split('log_')[-1].split('.')[0]
+        feather_filepath = base_filepath + '.feather'
+        parquet_filepath = base_filepath + '.parquet'
 
-        if not os.path.exists(data_filepath):
-            raise FileNotFoundError(f"Data file not found at: {data_filepath}")
+        if os.path.exists(feather_filepath):
+            data = pd.read_feather(feather_filepath)
+        elif os.path.exists(parquet_filepath):
+            data = pd.read_parquet(parquet_filepath)
+        else:
+            raise FileNotFoundError(
+                f"Data file not found. Expected either {feather_filepath} or {parquet_filepath}"
+            )
 
-        data = pd.read_feather(data_filepath)
         return log_data, data
 
-    
+
     def inst_freq(self, y, fs, zerocross=0):
         """
         Computes instantaneous frequency of input signal `y` based on sampling rate `fs`
@@ -91,10 +111,10 @@ class AnalysisGUI:
         """
         y1 = y[:-1]
         y2 = y[1:]
-        
+
         # Find zero-crossing indices
         zerocross_idx = np.where((y1 <= zerocross) & (y2 > zerocross))[0]
-        
+
         # Compute fractional zero-crossing positions
         amp_step = y[zerocross_idx + 1] - y[zerocross_idx]  # Amplitude step
         amp_frac = (zerocross - y[zerocross_idx]) / amp_step  # Fraction of step below zero
@@ -106,7 +126,7 @@ class AnalysisGUI:
 
         return inst_f, tinst_f
 
-    
+
     def compute_dominant_frequency(self, data, sample_rate, min_freq, max_freq):
         """Compute the dominant frequency of a quasi-sinusoidal signal within specified bounds."""
         # Compute FFT and frequency bins
@@ -119,19 +139,19 @@ class AnalysisGUI:
         # Find the frequency with the maximum FFT amplitude within the bounded range
         dominant_freq = filtered_frequencies[np.argmax(filtered_fft_result)]
         return dominant_freq
-    
+
 
     def refresh_plot(self):
         """Refresh the plots based on current settings."""
         if self.log_data is None or self.data is None:
             print("No data loaded. Please load a file first.")
             return
-        
+
         # Reset zoom or pan mode before refreshing the plot
         if hasattr(self, 'toolbar') and self.toolbar is not None:
             self.toolbar.mode = ''  # Reset active toolbar mode (zoom/pan)
             self.toolbar.update()  # Update the toolbar to reflect the change
-            
+
         # Clear previous plots
         for ax in self.axes:
             ax.clear()
@@ -139,8 +159,8 @@ class AnalysisGUI:
         # Extract key parameters
         sample_rate = int(self.log_data["Sample Rate"])
         # rec_dur = float(self.log_data["Recording Duration"])
-        rec_id = self.log_data["Recording ID"]  
-        
+        rec_id = self.log_data["Recording ID"]
+
         min_freq = self.min_y.get()
         max_freq = self.max_y.get()
 
@@ -150,14 +170,14 @@ class AnalysisGUI:
         # Detrend raw data
         channel_1 = detrend(self.data["ch 1"])
         # channel_2 = detrend(self.data["ch 1"])
-        
+
         # Plot raw data
         # max_y = max(np.max(channel_1))
         self.axes[0].plot(time_axis, channel_1, label="Ch 1")
         self.axes[0].set_title(f"Raw Data - Recording ID: {rec_id}")
         self.axes[0].set_ylabel("Amplitude")
         self.axes[0].legend(loc="lower left")
-        
+
         # Plot instantaneous frequency
         threshold = self.threshold.get()
         # zero_crossings = np.where(np.diff(np.sign(cumulated_data)))[0]
@@ -178,7 +198,7 @@ class AnalysisGUI:
         noverlap_value = 2**noverlap_exp
         # Create a Hanning window
         hanning_window = np.hanning(nfft_value)
-                
+
         self.axes[2].specgram(
             channel_1, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window
         )
@@ -189,19 +209,19 @@ class AnalysisGUI:
 
         # Adjust layout
         self.fig.tight_layout()
-        
-        
+
+
         # Update canvas and toolbar
         if self.canvas is not None:
             self.canvas.get_tk_widget().destroy()
         if hasattr(self, 'toolbar') and self.toolbar is not None:
             self.toolbar.destroy()
-    
+
         # Create a new canvas using FigureCanvasTkAgg
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.draw()
         self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
-    
+
         # Add the navigation toolbar
         self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
         self.toolbar.update()
