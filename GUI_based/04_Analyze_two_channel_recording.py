@@ -44,7 +44,7 @@ class AnalysisGUI:
         Button(self.control_frame, text="Refresh Plot", command=self.refresh_plot).pack(side="left", padx=5, pady=5)
 
         # Initialize plot
-        self.fig, self.axes = plt.subplots(5, 1, figsize=(15, 15))
+        self.fig, self.axes = plt.subplots(5, 1, figsize=(15, 10))
         self.canvas = None
         self.toolbar = None
 

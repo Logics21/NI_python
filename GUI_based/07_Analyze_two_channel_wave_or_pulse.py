@@ -47,11 +47,11 @@ class AnalysisGUI:
         Label(self.control_frame, text="noverlap exponent:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.noverlap, width=10).pack(side="left", padx=5, pady=5)
         # Additional controls for pulse analysis:
-        Label(self.control_frame, text="Threshold:").pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Pulse threshold:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.threshold, width=10).pack(side="left", padx=5, pady=5)
-        Label(self.control_frame, text="Pulse Window (s):").pack(side="left", padx=5, pady=5)
-        Entry(self.control_frame, textvariable=self.pulse_window, width=10).pack(side="left", padx=5, pady=5)
-        Button(self.control_frame, text="Export Mean Pulse Form", command=self.export_mean_pulse).pack(side="left", padx=5, pady=5)
+        # Label(self.control_frame, text="Pulse Window (s):").pack(side="left", padx=5, pady=5)
+        # Entry(self.control_frame, textvariable=self.pulse_window, width=10).pack(side="left", padx=5, pady=5)
+        # Button(self.control_frame, text="Export Mean Pulse Form", command=self.export_mean_pulse).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Refresh Plot", command=self.refresh_plot).pack(side="left", padx=5, pady=5)
 
         # Initialize plot (5 subplots)
@@ -134,12 +134,13 @@ class AnalysisGUI:
         # Detrend channels
         channel_1 = detrend(self.data["ch1"])
         channel_2 = detrend(self.data["ch2"])
+        max_y_val = max(np.max(channel_1), np.max(channel_2))
+
         
         analysis = self.analysis_type.get()
         
         if analysis == "wave":
             # Wave-type analysis (existing behavior)
-            max_y_val = max(np.max(channel_1), np.max(channel_2))
             self.axes[0].plot(time_axis, channel_1, label="Ch 1")
             self.axes[0].plot(time_axis, channel_2 + 2*max_y_val, label="Ch 2")
             self.axes[0].set_title(f"Raw Data - Recording ID: {rec_id}")
