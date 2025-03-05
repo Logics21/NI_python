@@ -4,9 +4,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame, StringVar, OptionMenu
+from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame
 import os
-from scipy.signal import detrend, find_peaks
+from scipy.signal import detrend
 
 class AnalysisGUI:
     
@@ -15,13 +15,11 @@ class AnalysisGUI:
         self.root.title("Data Analysis Tool")
         
         # GUI variables
-        self.threshold = DoubleVar(value=0.10)
+        self.threshold = DoubleVar(value=0.00)
         self.min_y = DoubleVar(value=200)
         self.max_y = DoubleVar(value=2000)
         self.nfft = IntVar(value=13)  # Default NFFT exponent
         self.noverlap = IntVar(value=10)  # Default noverlap exponent
-        self.pulse_window = DoubleVar(value=0.01)  # Pulse window in seconds (for pulse-type)
-        self.analysis_type = StringVar(value="pulse")  # "wave" or "pulse"
         self.log_data = None
         self.data = None
         self.mean_pulse_form = None  # To store computed mean pulse form
@@ -36,8 +34,6 @@ class AnalysisGUI:
 
         # Add controls
         Button(self.control_frame, text="Load File", command=self.load_file).pack(side="left", padx=5, pady=5)
-        Label(self.control_frame, text="Analysis Type:").pack(side="left", padx=5, pady=5)
-        OptionMenu(self.control_frame, self.analysis_type, "wave", "pulse").pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec min freq:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.min_y, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec max freq:").pack(side="left", padx=5, pady=5)
@@ -46,12 +42,8 @@ class AnalysisGUI:
         Entry(self.control_frame, textvariable=self.nfft, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="noverlap exponent:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.noverlap, width=10).pack(side="left", padx=5, pady=5)
-        # Additional controls for pulse analysis:
-        Label(self.control_frame, text="Pulse threshold:").pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Zerocross threshold:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.threshold, width=10).pack(side="left", padx=5, pady=5)
-        # Label(self.control_frame, text="Pulse Window (s):").pack(side="left", padx=5, pady=5)
-        # Entry(self.control_frame, textvariable=self.pulse_window, width=10).pack(side="left", padx=5, pady=5)
-        # Button(self.control_frame, text="Export Mean Pulse Form", command=self.export_mean_pulse).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Refresh Plot", command=self.refresh_plot).pack(side="left", padx=5, pady=5)
 
         # Initialize plot (5 subplots)
@@ -135,94 +127,43 @@ class AnalysisGUI:
         channel_1 = detrend(self.data["ch1"])
         channel_2 = detrend(self.data["ch2"])
         max_y_val = max(np.max(channel_1), np.max(channel_2))
-
         
-        analysis = self.analysis_type.get()
+        # Wave-type analysis (existing behavior)
+        self.axes[0].plot(time_axis, channel_1, label="Ch 1")
+        self.axes[0].plot(time_axis, channel_2 + 2*max_y_val, label="Ch 2")
+        self.axes[0].set_title(f"Raw Data - Recording ID: {rec_id}")
+        self.axes[0].set_ylabel("Amplitude")
+        self.axes[0].legend(loc="lower left")
         
-        if analysis == "wave":
-            # Wave-type analysis (existing behavior)
-            self.axes[0].plot(time_axis, channel_1, label="Ch 1")
-            self.axes[0].plot(time_axis, channel_2 + 2*max_y_val, label="Ch 2")
-            self.axes[0].set_title(f"Raw Data - Recording ID: {rec_id}")
-            self.axes[0].set_ylabel("Amplitude")
-            self.axes[0].legend(loc="lower left")
+        # Instantaneous frequency plots
+        inst_freq1, inst_time1 = self.inst_freq(channel_1, sample_rate, self.threshold.get())
+        self.axes[1].plot(inst_time1, inst_freq1, '.')
+        self.axes[1].set_title("Channel 1 Instantaneous Frequency")
+        self.axes[1].set_ylabel("Frequency (Hz)")
+        self.axes[1].set_xlabel("Time (s)")
+        self.axes[1].set_ylim(min_freq, max_freq)
+        
+        inst_freq2, inst_time2 = self.inst_freq(channel_2, sample_rate, self.threshold.get())
+        self.axes[2].plot(inst_time2, inst_freq2, '.')
+        self.axes[2].set_title("Channel 2 Instantaneous Frequency")
+        self.axes[2].set_ylabel("Frequency (Hz)")
+        self.axes[2].set_xlabel("Time (s)")
+        self.axes[2].set_ylim(min_freq, max_freq)
+        
+        # Spectrograms
+        nfft_value = 2**self.nfft.get()
+        noverlap_value = 2**self.noverlap.get()
+        hanning_window = np.hanning(nfft_value)
+        self.axes[3].specgram(channel_1, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window)
+        self.axes[3].set_title("Channel 1 Spectrogram")
+        self.axes[3].set_ylabel("Frequency (Hz)")
+        self.axes[3].set_ylim(min_freq, max_freq)
+        
+        self.axes[4].specgram(channel_2, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window)
+        self.axes[4].set_title("Channel 2 Spectrogram")
+        self.axes[4].set_ylabel("Frequency (Hz)")
+        self.axes[4].set_ylim(min_freq, max_freq)
             
-            # Instantaneous frequency plots
-            inst_freq1, inst_time1 = self.inst_freq(channel_1, sample_rate, self.threshold.get())
-            self.axes[1].plot(inst_time1, inst_freq1, '.')
-            self.axes[1].set_title("Channel 1 Instantaneous Frequency")
-            self.axes[1].set_ylabel("Frequency (Hz)")
-            self.axes[1].set_xlabel("Time (s)")
-            self.axes[1].set_ylim(min_freq, max_freq)
-            
-            inst_freq2, inst_time2 = self.inst_freq(channel_2, sample_rate, self.threshold.get())
-            self.axes[2].plot(inst_time2, inst_freq2, '.')
-            self.axes[2].set_title("Channel 2 Instantaneous Frequency")
-            self.axes[2].set_ylabel("Frequency (Hz)")
-            self.axes[2].set_xlabel("Time (s)")
-            self.axes[2].set_ylim(min_freq, max_freq)
-            
-            # Spectrograms
-            nfft_value = 2**self.nfft.get()
-            noverlap_value = 2**self.noverlap.get()
-            hanning_window = np.hanning(nfft_value)
-            self.axes[3].specgram(channel_1, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window)
-            self.axes[3].set_title("Channel 1 Spectrogram")
-            self.axes[3].set_ylabel("Frequency (Hz)")
-            self.axes[3].set_ylim(min_freq, max_freq)
-            
-            self.axes[4].specgram(channel_2, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window)
-            self.axes[4].set_title("Channel 2 Spectrogram")
-            self.axes[4].set_ylabel("Frequency (Hz)")
-            self.axes[4].set_ylim(min_freq, max_freq)
-            
-        elif analysis == "pulse":
-            # Pulse-type analysis
-            # Use channel_1 for pulse detection
-            peaks_1, properties_1 = find_peaks(channel_1, height=self.threshold.get(), distance = 50)
-            peaks_2, properties_2 = find_peaks(channel_2, height=self.threshold.get(), distance = 50)
-            
-            # Plot raw data with detected peaks
-            self.axes[0].plot(time_axis, channel_1, label="Ch 1")
-            self.axes[0].plot(time_axis[peaks_1], channel_1[peaks_1], "rx", label="Peaks")
-            self.axes[0].plot(time_axis, channel_2 + 2*max_y_val, label="Ch 2")
-            self.axes[0].plot(time_axis[peaks_2], channel_1[peaks_2], "rx", label="Peaks")
-
-
-            self.axes[0].set_title(f"Raw Data with Detected Peaks - Recording ID: {rec_id}")
-            self.axes[0].set_ylabel("Amplitude")
-            self.axes[0].legend(loc="lower left")
-            
-            # Compute inter-pulse intervals and instantaneous rate
-            if len(peaks_1) > 1:
-                peak_times_1 = time_axis[peaks_1]
-                dt_1 = np.diff(peak_times_1)
-                inst_rate_1 = 1.0 / dt_1
-                mid_times_1 = (peak_times_1[:-1] + peak_times_1[1:]) / 2
-                
-                peak_times_2 = time_axis[peaks_2]
-                dt_2 = np.diff(peak_times_2)
-                inst_rate_2 = 1.0 / dt_2
-                mid_times_2 = (peak_times_2[:-1] + peak_times_2[1:]) / 2
-                
-                self.axes[1].plot(mid_times_1, inst_rate_1, 'o')
-                self.axes[1].set_title("Instantaneous Pulse Rate Ch 1")
-                self.axes[1].set_ylabel("Rate (Hz)")
-                self.axes[1].set_xlabel("Time (s)")
-                
-                self.axes[2].plot(mid_times_2, inst_rate_2, 'o')
-                self.axes[2].set_title("Instantaneous Pulse Rate Ch 2")
-                self.axes[2].set_ylabel("Rate (Hz)")
-                self.axes[2].set_xlabel("Time (s)")
-
-            else:
-                self.axes[1].text(0.5, 0.5, "Not enough peaks detected", ha="center")
-                self.axes[2].text(0.5, 0.5, "Not enough peaks detected", ha="center")
-            
-            
-            # Turn off the 5th subplot if not used
-            self.axes[3].axis('off')
-            self.axes[4].axis('off')
         
         self.fig.tight_layout()
         
