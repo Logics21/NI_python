@@ -69,7 +69,7 @@ class AnalysisGUI:
     #     data = pd.read_feather(data_filepath)
     #     return log_data, data
 
-def load_data(self, log_filepath):
+    def load_data(self, log_filepath):
         """Load log file and associated data file."""
         with open(log_filepath, 'r') as file:
             log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
@@ -88,7 +88,7 @@ def load_data(self, log_filepath):
             )
 
         return log_data, data
-        
+
     def inst_freq(self, y, fs, zerocross=0):
         """
         Computes instantaneous frequency of input signal `y` based on sampling rate `fs`
