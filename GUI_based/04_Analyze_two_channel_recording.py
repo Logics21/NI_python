@@ -55,38 +55,28 @@ class AnalysisGUI:
             self.log_data, self.data = self.load_data(filepath)
             self.refresh_plot()
 
-    # def load_data(self, log_filepath):
-    #     """Load log file and associated data file."""
-    #     with open(log_filepath, 'r') as file:
-    #         log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
-    #
-    #     # data_filepath = log_data['Path to Datafile']
-    #     data_filepath = log_filepath.split('log_')[0]+log_filepath.split('log_')[-1].split('.')[0]+'.feather'
-    #
-    #     if not os.path.exists(data_filepath):
-    #         raise FileNotFoundError(f"Data file not found at: {data_filepath}")
-    #
-    #     data = pd.read_feather(data_filepath)
-    #     return log_data, data
-
     def load_data(self, log_filepath):
-        """Load log file and associated data file."""
+        """Load log file and associated data file."""    
         with open(log_filepath, 'r') as file:
             log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
-
+    
         base_filepath = log_filepath.split('log_')[0] + log_filepath.split('log_')[-1].split('.')[0]
         feather_filepath = base_filepath + '.feather'
         parquet_filepath = base_filepath + '.parquet'
-
+        bin_filepath = base_filepath + '.bin'
+    
         if os.path.exists(feather_filepath):
             data = pd.read_feather(feather_filepath)
         elif os.path.exists(parquet_filepath):
             data = pd.read_parquet(parquet_filepath)
+        elif os.path.exists(bin_filepath):
+            raw_data = np.fromfile(bin_filepath, dtype='f8')
+            data = pd.DataFrame(raw_data.reshape(-1, 3), columns=['time_ms', 'ch1', 'ch2'])
         else:
             raise FileNotFoundError(
-                f"Data file not found. Expected either {feather_filepath} or {parquet_filepath}"
+                f"Data file not found. Expected either {feather_filepath}, {parquet_filepath}, or {bin_filepath}"
             )
-
+    
         return log_data, data
 
     def inst_freq(self, y, fs, zerocross=0):
