@@ -28,6 +28,10 @@ import time
 import threading
 import pyarrow.parquet as pq
 import pyarrow as pa
+import os
+import h5py
+
+
 
 # Get list of DAQ device names
 daqSys = nidaqmx.system.System()
@@ -126,34 +130,44 @@ class DataAcquisition:
         return 0
 
 
-# File Writing Module
 class FileWriter(threading.Thread):
-    def __init__(self, storage_buffer, buffer_lock, filepath, sample_rate):
+    def __init__(self, storage_buffer, buffer_lock, filepath, sample_rate, flush_interval=1):
         super().__init__(daemon=True)
         self.storage_buffer = storage_buffer
         self.buffer_lock = buffer_lock
         self.filepath = filepath
         self.sample_rate = sample_rate
+        self.flush_interval = flush_interval
         self.stop_event = threading.Event()
 
     def run(self):
-        schema = pa.schema([("time_ms", pa.float64()), ("ch1", pa.float64())])
         acquired_samples = 0
         dt = 1000 / self.sample_rate
-        with pq.ParquetWriter(self.filepath, schema) as writer:
+        with open(self.filepath, 'ab') as f:
             while not self.stop_event.is_set():
-                time.sleep(1)
+                time.sleep(self.flush_interval)
                 with self.buffer_lock:
                     if not self.storage_buffer:
                         continue
-                    data_chunk = list(self.storage_buffer)
+                    data_chunk = np.array(self.storage_buffer, dtype='f8')
                     self.storage_buffer.clear()
+
                 n_samples = len(data_chunk)
-                time_vec = np.arange(acquired_samples * dt, (acquired_samples + n_samples) * dt, dt)
+                # time_vec = np.arange(acquired_samples * dt, (acquired_samples + n_samples) * dt, dt)
+                time_vec = (acquired_samples + np.arange(n_samples)) * dt
+
                 acquired_samples += n_samples
-                df = pd.DataFrame(list(zip(time_vec, data_chunk)), columns=["time_ms", "ch1"])
-                table = pa.Table.from_pandas(df, schema=schema)
-                writer.write_table(table)
+
+                # Interleave time and data, or store separately depending on your preference
+                interleaved = np.column_stack((time_vec, data_chunk)).flatten()
+
+                # Write binary data
+                interleaved.tofile(f)
+
+                # Ensure robust flushing
+                f.flush()
+                os.fsync(f.fileno())
+
         print("FileWriter stopped.")
 
     def stop(self):
@@ -373,8 +387,8 @@ class DataAcquisitionGUI(tk.Frame):
 
     def start_record(self):
         self.ExperimentSettingsFrame.record_button['state'] = 'disabled'
-        filepath = filedialog.asksaveasfilename(defaultextension=".parquet",
-                                                filetypes=[("Parquet files", "*.parquet")])
+        filepath = filedialog.asksaveasfilename(defaultextension=".bin",
+                                                filetypes=[("Binary files", "*.bin")])
         if not filepath:
             self.ExperimentSettingsFrame.record_button['state'] = 'enabled'
             return
@@ -403,7 +417,7 @@ class DataAcquisitionGUI(tk.Frame):
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
-        self.save_log_file()
+        # self.save_log_file()
 
     def stop_acquisition(self):
         if self.acq:
