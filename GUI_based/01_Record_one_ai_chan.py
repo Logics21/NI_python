@@ -90,6 +90,10 @@ class DataAcquisition:
 
     def stop(self):
         self.running = False
+        if self.recording_active:
+            self.recording_active = False
+            if self.recording_complete_callback is not None:
+                self.recording_complete_callback()
         try:
             self.task.stop()
             self.task.close()
@@ -412,7 +416,6 @@ class DataAcquisitionGUI(tk.Frame):
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
-        # self.save_log_file()
 
     def stop_acquisition(self):
         if self.acq:
