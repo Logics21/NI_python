@@ -398,6 +398,9 @@ class DataAcquisitionGUI(tk.Frame):
         self.acq.samples_to_save = int(self.record_duration * self.acq.sample_rate)
         self.acq.acquired_samples = 0  # Reset sample count
         self.acq.storage_buffer.clear()
+        
+        # Save log file
+        self.save_log_file()
 
         # Set the recording-complete callback
         self.acq.recording_complete_callback = lambda: self.master.after(0, self.on_recording_complete)
@@ -410,8 +413,6 @@ class DataAcquisitionGUI(tk.Frame):
     def on_recording_complete(self):
         self.ExperimentSettingsFrame.record_button['state'] = 'enabled'
         self.ExperimentSettingsFrame.close_button['state'] = 'enabled'
-
-        self.save_log_file()
 
         messagebox.showinfo("Finished", "Recording complete")
         if self.file_writer is not None:
