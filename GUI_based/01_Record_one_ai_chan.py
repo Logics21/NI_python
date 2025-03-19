@@ -23,14 +23,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import numpy as np
 import collections
-import pandas as pd
 import time
 import threading
-import pyarrow.parquet as pq
-import pyarrow as pa
 import os
-import h5py
-
 
 
 # Get list of DAQ device names
@@ -122,7 +117,6 @@ class DataAcquisition:
 
             if recording_complete:
                 self.recording_active = False
-                # self.stop()  # Stop acquisition since recording duration reached
                 if self.recording_complete_callback is not None:
                     self.recording_complete_callback()
 
