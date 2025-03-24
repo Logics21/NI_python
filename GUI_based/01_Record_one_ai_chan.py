@@ -129,7 +129,7 @@ class DataAcquisition:
 
 
 class FileWriter(threading.Thread):
-    def __init__(self, storage_buffer, buffer_lock, filepath, sample_rate, flush_interval=1):
+    def __init__(self, storage_buffer, buffer_lock, filepath, sample_rate, flush_interval=5):
         super().__init__(daemon=True)
         self.storage_buffer = storage_buffer
         self.buffer_lock = buffer_lock
@@ -390,6 +390,10 @@ class DataAcquisitionGUI(tk.Frame):
         if not filepath:
             self.ExperimentSettingsFrame.record_button['state'] = 'enabled'
             return
+        
+        # Overwrite/clear the file first to avoid appending to old data
+        with open(filepath, 'wb') as f:
+            pass  # just create or clear the file, no need to write anything yet
 
         self.record_filepath = filepath
         self.record_duration = float(self.ExperimentSettingsFrame.rec_dur_entry.get())
