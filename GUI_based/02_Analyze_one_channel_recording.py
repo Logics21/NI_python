@@ -13,6 +13,7 @@ class AnalysisGUI:
         self.root.title("Data Analysis Tool")
 
         # GUI variables
+        self.max_duration_s = DoubleVar(value=60.0)
         self.threshold = DoubleVar(value=0.00)
         self.min_y = DoubleVar(value=200)
         self.max_y = DoubleVar(value=2000)
@@ -30,6 +31,8 @@ class AnalysisGUI:
         self.control_frame.pack(side="bottom", fill="x")
 
         # Add controls
+        Label(self.control_frame, text="Max Duration (s, 0=all):").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.max_duration_s, width=8).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Load File", command=self.load_file).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec min freq:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.min_y, width=10).pack(side="left", padx=5, pady=5)
@@ -56,7 +59,6 @@ class AnalysisGUI:
             self.refresh_plot()
 
     def load_data(self, log_filepath):
-        """Load log file and associated data file."""    
         with open(log_filepath, 'r') as file:
             log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
     
@@ -65,17 +67,37 @@ class AnalysisGUI:
         parquet_filepath = base_filepath + '.parquet'
         bin_filepath = base_filepath + '.bin'
     
-        if os.path.exists(feather_filepath):
-            data = pd.read_feather(feather_filepath)
+        sample_rate = int(log_data["Sample Rate"])
+        max_duration = float(self.max_duration_s.get())
+        max_samples = None if max_duration == 0 else int(max_duration * sample_rate)
+    
+        if os.path.exists(bin_filepath):
+            n_cols = 3  # time_ms, ch1, ch2
+            if max_samples is None:
+                raw_data = np.fromfile(bin_filepath, dtype='f8')
+            else:
+                total_values = max_samples * n_cols
+                raw_data = np.fromfile(bin_filepath, dtype='f8', count=total_values)
+            reshaped = raw_data.reshape(-1, n_cols)
+            data = pd.DataFrame(reshaped, columns=['time_ms', 'ch1', 'ch2'])
+    
+        elif os.path.exists(feather_filepath):
+            import pyarrow.feather as feather
+            import pyarrow as pa
+            table = feather.read_table(feather_filepath)
+            if max_samples is not None:
+                table = table.slice(0, max_samples)
+            data = table.to_pandas()
+    
         elif os.path.exists(parquet_filepath):
-            data = pd.read_parquet(parquet_filepath)
-        elif os.path.exists(bin_filepath):
-            raw_data = np.fromfile(bin_filepath, dtype='f8')
-            data = pd.DataFrame(raw_data.reshape(-1, 2), columns=['time_ms', 'ch1'])
+            import pyarrow.parquet as pq
+            table = pq.read_table(parquet_filepath)
+            if max_samples is not None:
+                table = table.slice(0, max_samples)
+            data = table.to_pandas()
+    
         else:
-            raise FileNotFoundError(
-                f"Data file not found. Expected either {feather_filepath}, {parquet_filepath}, or {bin_filepath}"
-            )
+            raise FileNotFoundError("Expected data file not found.")
     
         return log_data, data
 
