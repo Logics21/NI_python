@@ -13,7 +13,8 @@ class AnalysisGUI:
         self.root.title("Data Analysis Tool")
 
         # GUI variables
-        self.max_duration_s = DoubleVar(value=60.0)
+        self.start_time_s = DoubleVar(value=0.0)
+        self.end_time_s = DoubleVar(value=60.0)
         self.threshold = DoubleVar(value=0.00)
         self.min_y = DoubleVar(value=200)
         self.max_y = DoubleVar(value=2000)
@@ -31,8 +32,10 @@ class AnalysisGUI:
         self.control_frame.pack(side="bottom", fill="x")
 
         # Add controls
-        Label(self.control_frame, text="Max Duration (s, 0=all):").pack(side="left", padx=5, pady=5)
-        Entry(self.control_frame, textvariable=self.max_duration_s, width=8).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Start (s):").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.start_time_s, width=8).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="End (s, 0=EOF):").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.end_time_s, width=8).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Load File", command=self.load_file).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec min freq:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.min_y, width=10).pack(side="left", padx=5, pady=5)
@@ -68,16 +71,25 @@ class AnalysisGUI:
         bin_filepath = base_filepath + '.bin'
     
         sample_rate = int(log_data["Sample Rate"])
-        max_duration = float(self.max_duration_s.get())
-        max_samples = None if max_duration == 0 else int(max_duration * sample_rate)
+        start_time = float(self.start_time_s.get())
+        end_time = float(self.end_time_s.get())
+    
+        start_sample = int(start_time * sample_rate)
+        end_sample = None if end_time == 0 else int(end_time * sample_rate)
+        n_cols = 3  # time_ms, ch1, ch2
     
         if os.path.exists(bin_filepath):
-            n_cols = 3  # time_ms, ch1, ch2
-            if max_samples is None:
-                raw_data = np.fromfile(bin_filepath, dtype='f8')
+            if end_sample is not None:
+                n_samples = end_sample - start_sample
+                offset = start_sample * n_cols * 8  # float64 = 8 bytes
+                with open(bin_filepath, 'rb') as f:
+                    f.seek(offset)
+                    raw_data = np.fromfile(f, dtype='f8', count=n_samples * n_cols)
             else:
-                total_values = max_samples * n_cols
-                raw_data = np.fromfile(bin_filepath, dtype='f8', count=total_values)
+                offset = start_sample * n_cols * 8
+                with open(bin_filepath, 'rb') as f:
+                    f.seek(offset)
+                    raw_data = np.fromfile(f, dtype='f8')
             reshaped = raw_data.reshape(-1, n_cols)
             data = pd.DataFrame(reshaped, columns=['time_ms', 'ch1', 'ch2'])
     
@@ -85,15 +97,19 @@ class AnalysisGUI:
             import pyarrow.feather as feather
             import pyarrow as pa
             table = feather.read_table(feather_filepath)
-            if max_samples is not None:
-                table = table.slice(0, max_samples)
+            if end_sample is None:
+                table = table.slice(start_sample)
+            else:
+                table = table.slice(start_sample, end_sample - start_sample)
             data = table.to_pandas()
     
         elif os.path.exists(parquet_filepath):
             import pyarrow.parquet as pq
             table = pq.read_table(parquet_filepath)
-            if max_samples is not None:
-                table = table.slice(0, max_samples)
+            if end_sample is None:
+                table = table.slice(start_sample)
+            else:
+                table = table.slice(start_sample, end_sample - start_sample)
             data = table.to_pandas()
     
         else:
