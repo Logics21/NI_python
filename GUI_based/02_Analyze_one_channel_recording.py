@@ -76,7 +76,7 @@ class AnalysisGUI:
     
         start_sample = int(start_time * sample_rate)
         end_sample = None if end_time == 0 else int(end_time * sample_rate)
-        n_cols = 3  # time_ms, ch1, ch2
+        n_cols = 2  # time_ms, ch1, ch2
     
         if os.path.exists(bin_filepath):
             if end_sample is not None:
