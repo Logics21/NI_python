@@ -145,8 +145,9 @@ class AnalysisGUI:
         sample_rate = int(self.log_data["Sample Rate"])
         rec_id = self.log_data["Recording ID"]
         total_samples = len(self.data)
-        time_axis = np.arange(total_samples) / sample_rate
-
+        start_offset = float(self.start_time_s.get())
+        time_axis = start_offset + np.arange(total_samples) / sample_rate
+        
         ch1 = detrend(self.data["ch1"])
         ch2 = detrend(self.data["ch2"])
 
@@ -214,7 +215,7 @@ class AnalysisGUI:
             bin_size = float(self.time_bin_size.get())
             if bin_size > 0 and len(unique_times):
                 max_time = unique_times[-1]
-                bins = np.arange(0, max_time + bin_size, bin_size)
+                bins = np.arange(start_offset, max_time + bin_size, bin_size)
                 counts, _ = np.histogram(unique_times, bins)
                 rates = counts / bin_size
                 bin_centers = bins[:-1] + bin_size / 2
@@ -241,8 +242,11 @@ class AnalysisGUI:
 
         sample_rate = int(self.log_data["Sample Rate"])
         bin_size = float(self.time_bin_size.get())
-        total_time = self.data["time_ms"].iloc[-1] / 1000.0
-        n_bins = int(np.ceil(total_time / bin_size))
+        start_time = float(self.start_time_s.get())
+        end_time = float(self.end_time_s.get())
+        total_time = self.data["time_ms"].iloc[-1] / 1000.0 if end_time == 0 else end_time
+
+        n_bins = int(np.ceil((total_time - start_time) / bin_size))
         
         pairs1 = self.pulse_pairs_ch1
         pairs2 = self.pulse_pairs_ch2
@@ -273,7 +277,7 @@ class AnalysisGUI:
 
 
         df = pd.DataFrame({
-            "TimeStart_s": np.arange(n_bins) * bin_size,
+            "TimeStart_s": start_time + np.arange(n_bins) * bin_size,
             "Ch1_Pulses": c1,
             "Ch2_Pulses": c2,
             "Combined_Unique_Rate_Hz": combined_rate
