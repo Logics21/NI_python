@@ -107,43 +107,11 @@ class DataAcquisition:
         except Exception as e:
             print("Error stopping DAQ task:", e)
 
-    # def callback(self, task_handle, event_type, number_of_samples, callback_data):
-    #     if not self.running:
-    #         return 0
-    #     # temp_data = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
-    #     temp_data = self.task.read(number_of_samples_per_channel=self.sample_interval)
-    #     self.plot_buffer1.extend(temp_data[0])
-    #     self.plot_buffer2.extend(temp_data[1])
-        
-    #     if self.recording_active:
-    #         n_samples = len(temp_data[0])
-    #         if self.acquired_samples + n_samples >= self.samples_to_save:
-    #             diff = (self.acquired_samples + n_samples) - self.samples_to_save
-    #             n_samples = n_samples - diff
-    #             temp_data[0] = temp_data[0][:n_samples]
-    #             temp_data[1] = temp_data[1][:n_samples]
-    #             recording_complete = True
-    #         else:
-    #             recording_complete = False
-
-    #         self.storage_buffer1.extend(temp_data[0])
-    #         self.storage_buffer2.extend(temp_data[1])
-    #         self.acquired_samples += n_samples
-
-    #         if recording_complete:
-    #             self.recording_active = False
-    #             if self.recording_complete_callback is not None:
-    #                 self.recording_complete_callback()
-
-
-    #     return 0
-
     # Simplified Callback
     def callback(self, task_handle, every_n_samples_event_type, number_of_samples, callback_data):
         if not self.running:
             return 0
         temp_data = self.task.read(number_of_samples)
-        # temp_data = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
         
         # Immediately extend buffers without additional overhead
         self.plot_buffer1.extend(temp_data[0])
@@ -179,12 +147,6 @@ class FileWriter(threading.Thread):
             while not self.stop_event.is_set():
                 time.sleep(self.flush_interval)
                 with self.buffer_lock:
-                    # if not self.storage_buffer1:
-                    #     continue
-                    # data_chunk1 = np.array(self.storage_buffer1, dtype='f8')
-                    # data_chunk2 = np.array(self.storage_buffer2, dtype='f8')
-                    # self.storage_buffer1.clear()
-                    # self.storage_buffer2.clear()
                     len1 = len(self.storage_buffer1)
                     len2 = len(self.storage_buffer2)
     
@@ -200,13 +162,8 @@ class FileWriter(threading.Thread):
                     data_chunk2 = np.array(
                         [self.storage_buffer2.popleft() for _ in range(min_length)], dtype='f8'
                     )
-                    
-                # n_samples = len(data_chunk1)
-                # time_vec = np.arange(acquired_samples * dt, (acquired_samples + n_samples) * dt, dt)
-                # time_vec = (acquired_samples + np.arange(n_samples)) * dt
-                time_vec = (acquired_samples + np.arange(min_length)) * dt
 
-                # acquired_samples += n_samples
+                time_vec = (acquired_samples + np.arange(min_length)) * dt
                 acquired_samples += min_length
 
                 # Interleave time and data, or store separately depending on your preference
@@ -407,7 +364,6 @@ class DataAcquisitionGUI(tk.Frame):
 
         # Instantiate Data Acquisition module
         self.acq = DataAcquisition(input_channel1, input_channel2, sample_rate, -10, 10, refresh_rate, plot_duration)
-        # self.acq.plot_buffer = collections.deque(maxlen=int(plot_duration * sample_rate))
         self.acq.storage_buffer1 = collections.deque()
         self.acq.storage_buffer2 = collections.deque()
         self.acq.start()
@@ -433,14 +389,11 @@ class DataAcquisitionGUI(tk.Frame):
             # Plot a green dot at the right edge of the plot (using the buffer’s maximum length)
             self.graphDataFrame.ax1.scatter(self.acq.plot_buffer1.maxlen, 0, s=200, color='green', clip_on=False)
 
-
-        
         # Plot spectrogram only if checkbox is checked
         if self.plot_spec == 1:
             self.graphDataFrame.ax3.cla()
             self.graphDataFrame.ax4.cla()
             if len(self.acq.plot_buffer1) > 0:
-                # data = list(self.acq.plot_buffer)
                 spec1_dom_f = compute_dominant_frequency(list(self.acq.plot_buffer1), self.acq.sample_rate,
                                                        self.min_y,
                                                        self.max_y)

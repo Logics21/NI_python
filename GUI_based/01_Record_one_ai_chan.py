@@ -151,9 +151,7 @@ class FileWriter(threading.Thread):
                     self.storage_buffer.clear()
 
                 n_samples = len(data_chunk)
-                # time_vec = np.arange(acquired_samples * dt, (acquired_samples + n_samples) * dt, dt)
                 time_vec = (acquired_samples + np.arange(n_samples)) * dt
-
                 acquired_samples += n_samples
 
                 # Interleave time and data, or store separately depending on your preference
