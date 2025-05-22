@@ -193,6 +193,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         plot_layout.addRow("Min Freq (Hz):", self.specMinEdit)
         self.specMaxEdit = QtWidgets.QLineEdit("1400")
         plot_layout.addRow("Max Freq (Hz):", self.specMaxEdit)
+        self.specWindowEdit = QtWidgets.QLineEdit("12")  # <-- Add this line
+        plot_layout.addRow("Spec. Window Size Exponent:", self.specWindowEdit)  # <-- And this line
         self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram")
         self.specCheck.setChecked(True)
         plot_layout.addRow(self.specCheck)
@@ -279,31 +281,43 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
     def update_plot(self):
         # Update raw data plot
-        data = list(self.acq.plot_buffer)
+        data = np.array(self.acq.plot_buffer)  # Use numpy array for both plots
         self.rawPlotWidget.clear()
-        if data:
+        if data.size > 0:
             self.rawPlotWidget.plot(data, pen='y')
             if self.acq.recording_active:
-                # Plot a green dot at the right edge
-                self.rawPlotWidget.plot([len(self.acq.plot_buffer)], [0], pen=None, symbol='o', symbolBrush='g')
+                self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g')
                 
         # Update spectrogram if checked
-            
-        if self.specCheck.isChecked() and data:
-            # Compute spectrogram using numpy (simple version)
-            # Use a sliding window; here we use a fixed window length
-            window = 256
-            if len(data) >= window:
-                # Split the signal into overlapping segments
+        if self.specCheck.isChecked() and data.size > 0:
+            try:
+                window = 2**int(self.specWindowEdit.text())
+            except ValueError:
+                window = 1024  # fallback default
+
+            if data.size >= window:
+                # Use the same data as rawPlotWidget
                 segments = []
                 step = window // 2
-                for i in range(0, len(data)-window, step):
+                for i in range(0, data.size - window, step):
                     segment = data[i:i+window]
                     segments.append(np.abs(np.fft.rfft(segment)))
                 spec = np.array(segments).T
+
+                sample_rate = self.acq.sample_rate
+                freqs = np.fft.rfftfreq(window, d=1/sample_rate)
+
+                min_freq = float(self.specMinEdit.text())
+                max_freq = float(self.specMaxEdit.text())
+
+                freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
+                spec = spec[freq_mask, :]
+                freqs = freqs[freq_mask]
+
                 self.specPlotWidget.setImage(spec, autoLevels=True)
+                self.specPlotWidget.getView().setLimits(xMin=min_freq, xMax=max_freq)
+                self.specPlotWidget.getView().setRange(xRange=(min_freq, max_freq))
         else:
-            # self.specPlotWidget.clearImage()
             self.specPlotWidget.setImage(np.array([]))
         
 
