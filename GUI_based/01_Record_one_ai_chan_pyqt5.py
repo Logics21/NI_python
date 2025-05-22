@@ -16,8 +16,10 @@ from pyqtgraph import ImageItem
 import pandas as pd
 import pyarrow.parquet as pq
 import pyarrow as pa
-from PyQt5 import QtWidgets, QtCore
+from PyQt5 import QtWidgets, QtCore, QtGui
 from scipy import signal
+from scipy.signal import spectrogram
+
 
 # Get list of DAQ device names
 daqSys = nidaqmx.system.System()
@@ -225,7 +227,12 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
         # Right plotting panel using pyqtgraph
         self.rawPlotWidget = pg.PlotWidget(title="Raw Data")
-        self.specPlotWidget = pg.ImageView(view=pg.PlotItem(title="Spectrogram"))
+        # self.specPlotWidget = pg.ImageView(view=pg.PlotItem(title="Spectrogram"))
+        self.specPlotWidget = pg.PlotWidget(title="Spectrogram")
+        # self.imageItem = pg.ImageItem(axisOrder='col-major') # this arg is purely for performance
+        # self.specPlotWidget.addItem(self.imageItem)
+        self.specPlotWidget.setMouseEnabled(x=False, y=False)
+
         # Layout for plotting
         plot_layout = QtWidgets.QVBoxLayout()
         plot_layout.addWidget(self.rawPlotWidget)
@@ -260,6 +267,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.refreshRateEdit.setEnabled(False)
         self.specMinEdit.setEnabled(False)
         self.specMaxEdit.setEnabled(False)
+        self.specWindowEdit.setEnabled(False)
         self.specCheck.setEnabled(False)
 
         # Get parameters
@@ -281,44 +289,67 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
     def update_plot(self):
         # Update raw data plot
-        data = np.array(self.acq.plot_buffer)  # Use numpy array for both plots
+        data = np.array(self.acq.plot_buffer)
         self.rawPlotWidget.clear()
         if data.size > 0:
             self.rawPlotWidget.plot(data, pen='y')
             if self.acq.recording_active:
                 self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g')
-                
-        # Update spectrogram if checked
+
+        # --- Spectrogram using scipy.signal.spectrogram and pyqtgraph.ImageItem ---
         if self.specCheck.isChecked() and data.size > 0:
             try:
-                window = 2**int(self.specWindowEdit.text())
-            except ValueError:
-                window = 1024  # fallback default
+                fft_size = 2 ** int(self.specWindowEdit.text())
+            except Exception:
+                fft_size = 1024
 
-            if data.size >= window:
-                # Use the same data as rawPlotWidget
-                segments = []
-                step = window // 2
-                for i in range(0, data.size - window, step):
-                    segment = data[i:i+window]
-                    segments.append(np.abs(np.fft.rfft(segment)))
-                spec = np.array(segments).T
+            min_freq = float(self.specMinEdit.text())
+            max_freq = float(self.specMaxEdit.text())
+            sample_rate = self.acq.sample_rate
 
-                sample_rate = self.acq.sample_rate
-                freqs = np.fft.rfftfreq(window, d=1/sample_rate)
+            # Only compute if enough data
+            if data.size >= fft_size:
+                # Use all available data for a rolling spectrogram
+                f, t, Sxx = signal.spectrogram(
+                    data,
+                    fs=sample_rate,
+                    window='hann',
+                    nperseg=fft_size,
+                    noverlap=fft_size // 2,
+                    detrend=False,
+                    scaling='density',
+                    mode='magnitude'
+                )
 
-                min_freq = float(self.specMinEdit.text())
-                max_freq = float(self.specMaxEdit.text())
+                # Restrict frequency range
+                freq_mask = (f >= min_freq) & (f <= max_freq)
+                # Sxx = Sxx[freq_mask, :]
+                # f = f[freq_mask]
 
-                freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
-                spec = spec[freq_mask, :]
-                freqs = freqs[freq_mask]
+                # Set pyqtgraph config for row-major
+                pg.setConfigOptions(imageAxisOrder='row-major')
 
-                self.specPlotWidget.setImage(spec, autoLevels=True)
-                self.specPlotWidget.getView().setLimits(xMin=min_freq, xMax=max_freq)
-                self.specPlotWidget.getView().setRange(xRange=(min_freq, max_freq))
+                # Remove all items from the plot and add a new ImageItem
+                self.specPlotWidget.clear()
+                img = pg.ImageItem(axisOrder='row-major')
+                self.specPlotWidget.addItem(img)
+
+                # Set the image data
+                img.setImage(Sxx, autoLevels=True)
+
+                # Scale axes to time and frequency
+                if t.size > 1 and f.size > 1:
+                    img.resetTransform()
+                    xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
+                    yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
+                    transform = QtGui.QTransform()
+                    transform.scale(xscale, yscale)
+                    img.setTransform(transform)
+                    self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=min_freq, yMax=max_freq)
+                    self.specPlotWidget.setLabel('bottom', "Time", units='s')
+                    self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
         else:
-            self.specPlotWidget.setImage(np.array([]))
+            self.specPlotWidget.clear()
         
 
     def start_record(self):
@@ -342,6 +373,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         # Start FileWriter thread
         self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, filepath, self.acq.sample_rate)
         self.file_writer.start()
+        self.save_log_file()
 
     def on_recording_complete(self):
         self.recordBtn.setEnabled(True)
@@ -349,7 +381,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
-        self.save_log_file()
+        # self.save_log_file()
 
     def save_log_file(self):
         # Save log file alongside the data file.
@@ -380,6 +412,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.refreshRateEdit.setEnabled(True)
         self.specMinEdit.setEnabled(True)
         self.specMaxEdit.setEnabled(True)
+        self.specWindowEdit.setEnabled(True)
         self.specCheck.setEnabled(True)
 
     def reset_device(self):
