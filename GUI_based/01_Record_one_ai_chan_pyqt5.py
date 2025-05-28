@@ -158,7 +158,7 @@ class FileWriter(threading.Thread):
 class DataAcquisitionGUI(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("eFish Recorder")
+        self.setWindowTitle("NI DAQ Recorder")
         self.resize(1600, 900)
         self.acq = None
         self.file_writer = None
@@ -211,13 +211,16 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.recDurEdit = QtWidgets.QLineEdit("60")
         exp_layout.addRow("Duration (s):", self.recDurEdit)
         btn_layout = QtWidgets.QHBoxLayout()
-        self.startBtn = QtWidgets.QPushButton("Start")
-        self.stopBtn = QtWidgets.QPushButton("Stop")
-        self.recordBtn = QtWidgets.QPushButton("Start Recording")
+        self.connectBtn = QtWidgets.QPushButton("Connect")
+        self.connectBtn.setStyleSheet("color: green; font-weight: bold;")
+        self.disconnectBtn = QtWidgets.QPushButton("Disconnect")
+        self.disconnectBtn.setStyleSheet("color: #003366; font-weight: bold;")
+        self.recordBtn = QtWidgets.QPushButton("● Record")
+        self.recordBtn.setStyleSheet("color: red; font-weight: bold;")
         self.resetBtn = QtWidgets.QPushButton("Reset DAQ")
         self.closeBtn = QtWidgets.QPushButton("Close")
-        btn_layout.addWidget(self.startBtn)
-        btn_layout.addWidget(self.stopBtn)
+        btn_layout.addWidget(self.connectBtn)
+        btn_layout.addWidget(self.disconnectBtn)
         btn_layout.addWidget(self.recordBtn)
         btn_layout.addWidget(self.resetBtn)
         btn_layout.addWidget(self.closeBtn)
@@ -246,16 +249,17 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.setLayout(main_layout)
 
         # Connect button signals
-        self.startBtn.clicked.connect(self.start_acquisition)
-        self.stopBtn.clicked.connect(self.stop_acquisition)
+        self.connectBtn.clicked.connect(self.start_acquisition)
+        self.disconnectBtn.clicked.connect(self.stop_acquisition)
         self.recordBtn.clicked.connect(self.start_record)
         self.resetBtn.clicked.connect(self.reset_device)
         self.closeBtn.clicked.connect(QtWidgets.qApp.quit)
 
     def start_acquisition(self):
         # Disable controls
-        self.startBtn.setEnabled(False)
-        self.stopBtn.setEnabled(True)
+        self.connectBtn.setEnabled(False)
+        self.resetBtn.setEnabled(False)
+        self.disconnectBtn.setEnabled(True)
         self.recordBtn.setEnabled(True)
         self.daqCombo.setEnabled(False)
         self.chanEdit.setEnabled(False)
@@ -403,8 +407,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         if self.acq:
             self.acq.stop()
         self.plot_timer.stop()
-        self.startBtn.setEnabled(True)
-        self.stopBtn.setEnabled(False)
+        self.connectBtn.setEnabled(True)
+        self.resetBtn.setEnabled(True)
+        self.disconnectBtn.setEnabled(False)
         self.recordBtn.setEnabled(False)
         self.daqCombo.setEnabled(True)
         self.chanEdit.setEnabled(True)
