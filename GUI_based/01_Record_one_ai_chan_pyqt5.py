@@ -76,17 +76,22 @@ class DataAcquisition:
         self.acquired_samples = 0
         self.samples_to_save = 0
         self.recording_complete_callback = None
+        self.recording_start_timestamp = None
+        self.logfile_written = False
 
     def start(self):
         self.running = True
+        self.recording_start_timestamp = None
+        self.logfile_written = False
         self.task.start()
 
     def stop(self):
         self.running = False
-        if self.recording_active:  # In case recording is running, signal completion
+        if self.recording_active:
             self.recording_active = False
             if self.recording_complete_callback is not None:
                 self.recording_complete_callback()
+        self.recording_start_timestamp = None  # Reset timestamp when finished
         try:
             self.task.stop()
             self.task.close()
@@ -103,6 +108,13 @@ class DataAcquisition:
         # If recording is active, store data for saving
         if self.recording_active:
             n_samples = len(temp_data)
+            if self.recording_start_timestamp is None:
+                self.recording_start_timestamp = time.time() - (n_samples - 1) / self.sample_rate
+            # Save logfile only once, right after timestamp is set
+            if not self.logfile_written and self.recording_start_timestamp is not None:
+                if hasattr(self, 'logfile_callback'):
+                    self.logfile_callback()
+                self.logfile_written = True
             if self.acquired_samples + n_samples >= self.samples_to_save:
                 diff = (self.acquired_samples + n_samples) - self.samples_to_save
                 n_samples = n_samples - diff
@@ -197,8 +209,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         plot_layout.addRow("Min Freq (Hz):", self.specMinEdit)
         self.specMaxEdit = QtWidgets.QLineEdit("1400")
         plot_layout.addRow("Max Freq (Hz):", self.specMaxEdit)
-        self.specWindowEdit = QtWidgets.QLineEdit("12")  # <-- Add this line
-        plot_layout.addRow("Spec. Window Size Exponent:", self.specWindowEdit)  # <-- And this line
+        self.specWindowEdit = QtWidgets.QLineEdit("12")
+        plot_layout.addRow("Spec. Window Size Exponent:", self.specWindowEdit)
         self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram")
         self.specCheck.setChecked(True)
         plot_layout.addRow(self.specCheck)
@@ -344,8 +356,13 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         data = np.array(self.acq.plot_buffer)
         self.rawPlotWidget.clear()
         if data.size > 0:
-            # self.rawPlotWidget.plot(data, pen='y')
-            self.rawPlotWidget.plot(data, pen='b')
+            # For dark mode, use 'y' for yellow, for bright mode use 'b' for blue
+            if pg.getConfigOption('background') == 'k':  # Dark mode
+                self.rawPlotWidget.plot(data, pen='y')
+            else:  # Bright mode
+                # Use blue for bright mode
+                self.rawPlotWidget.plot(data, pen='b')
+
             self.rawPlotWidget.setLabel('bottom', "Sample", units='s')
             self.rawPlotWidget.setLabel('left', "Voltage", units='V')
             if self.acq.recording_active:
@@ -416,30 +433,43 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.acq.recording_complete_callback = lambda: QtCore.QTimer.singleShot(0, self.on_recording_complete)
         self.acq.recording_active = True
 
+        # Reset logfile_written flag for each new recording
+        self.acq.logfile_written = False
+
+        # Set logfile callback to save log file after recording starts
+        self.acq.logfile_callback = self.save_log_file
+
         # Start FileWriter thread
         self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, filepath, self.acq.sample_rate)
         self.file_writer.start()
-        self.save_log_file()
 
     def on_recording_complete(self):
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
+        self.acq.recording_start_timestamp = None  # Reset timestamp after recording
         self.recordBtn.setEnabled(True)
         QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
 
-        # self.save_log_file()
 
     def save_log_file(self):
         # Save log file alongside the data file.
         log_filename = f"log_{os.path.basename(self.record_filepath).split('.')[0]}.txt"
         log_filepath = os.path.join(os.path.dirname(self.record_filepath), log_filename)
+        # Format timestamp with ms resolution
+        if self.acq and self.acq.recording_start_timestamp is not None:
+            from datetime import datetime
+            dt = datetime.fromtimestamp(self.acq.recording_start_timestamp)
+            timestamp_str = dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # up to ms
+        else:
+            timestamp_str = "N/A"
         log_data = {
             "N_Input_Channels": 1,
             "Sample_Rate": self.acq.sample_rate,
             "Recording_ID": self.recIdEdit.text(),
             "Recording_Duration": self.recDurEdit.text(),
-            "Input_Channel": self.chanEdit.text()
+            "Input_Channel": self.chanEdit.text(),
+            "Recording_Start_Timestamp": timestamp_str
         }
         with open(log_filepath, 'w') as f:
             for key, value in log_data.items():
