@@ -7,22 +7,24 @@ Created on Thu Mar  6 13:43:40 2025
 Authors: ShuttleBox / Stefan Mucha (ported by ChatGPT)
 """
 
-import sys, os, time, threading, collections
+import sys
+import os
+import time
+import threading
+import collections
 import numpy as np
 import nidaqmx
 from nidaqmx import constants
 import pyqtgraph as pg
-from pyqtgraph import ImageItem
 from PyQt5 import QtWidgets, QtCore, QtGui
 from scipy import signal
-
+from datetime import datetime
 
 # Get list of DAQ device names
 daqSys = nidaqmx.system.System()
 daqList = daqSys.devices.device_names
-if len(daqList) == 0:
+if not daqList:
     raise ValueError('No DAQ detected, check connection.')
-
 
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
@@ -32,7 +34,7 @@ class DataAcquisition:
         self.min_voltage = min_voltage
         self.max_voltage = max_voltage
         self.refresh_rate = refresh_rate
-        # Calculate sample_interval based on refresh_rate
+
         sample_interval = int(self.sample_rate / self.refresh_rate)
         buffer_size = 100000
         if buffer_size % sample_interval != 0:
@@ -42,11 +44,9 @@ class DataAcquisition:
                     break
         self.sample_interval = sample_interval
 
-        # Buffers for plotting and file writing
         self.plot_buffer = collections.deque(maxlen=int(plot_duration * self.sample_rate))
         self.storage_buffer = collections.deque()
 
-        # Create and configure DAQ Task
         self.task = nidaqmx.Task()
         self.task.ai_channels.add_ai_voltage_chan(
             self.input_channel, min_val=self.min_voltage, max_val=self.max_voltage,
@@ -55,7 +55,6 @@ class DataAcquisition:
         self.task.register_every_n_samples_acquired_into_buffer_event(self.sample_interval, self.callback)
         self.running = False
 
-        # Recording attributes
         self.recording_active = False
         self.acquired_samples = 0
         self.samples_to_save = 0
@@ -76,7 +75,7 @@ class DataAcquisition:
             self.recording_active = False
             if self.recording_complete_callback is not None:
                 self.recording_complete_callback()
-        self.recording_start_timestamp = None  # Reset timestamp when finished
+        self.recording_start_timestamp = None
         try:
             self.task.stop()
             self.task.close()
@@ -87,15 +86,12 @@ class DataAcquisition:
         if not self.running:
             return 0
         temp_data = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
-        # Extend the plot buffer (always store data for plotting)
         self.plot_buffer.extend(temp_data)
 
-        # If recording is active, store data for saving
         if self.recording_active:
             n_samples = len(temp_data)
             if self.recording_start_timestamp is None:
                 self.recording_start_timestamp = time.time() - (n_samples - 1) / self.sample_rate
-            # Save logfile only once, right after timestamp is set
             if not self.logfile_written and self.recording_start_timestamp is not None:
                 if self.logfile_callback:
                     self.logfile_callback()
@@ -167,10 +163,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.init_ui()
 
     def init_ui(self):
-        # Left controls panel
         controls_layout = QtWidgets.QVBoxLayout()
 
-        # DAQ Settings GroupBox
+        # DAQ Settings
         self.daqGroup = QtWidgets.QGroupBox("DAQ Settings")
         daq_layout = QtWidgets.QFormLayout()
         self.daqCombo = QtWidgets.QComboBox()
@@ -183,7 +178,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.daqGroup.setLayout(daq_layout)
         controls_layout.addWidget(self.daqGroup)
 
-        # Plot Settings GroupBox
+        # Plot Settings
         self.plotGroup = QtWidgets.QGroupBox("Plot Settings")
         plot_layout = QtWidgets.QFormLayout()
         self.plotDurEdit = QtWidgets.QLineEdit("1")
@@ -199,28 +194,21 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram")
         self.specCheck.setChecked(True)
         plot_layout.addRow(self.specCheck)
-
-        # Add checkbox for dominant frequency display
         self.domFreqCheck = QtWidgets.QCheckBox("Show Dominant Frequency")
         self.domFreqCheck.setChecked(True)
         plot_layout.addRow(self.domFreqCheck)
-
-        # Add a label to display the dominant frequency
         self.domFreqLabel = QtWidgets.QLabel("Dominant Frequency: --- Hz")
         plot_layout.addRow(self.domFreqLabel)
-
         self.plotGroup.setLayout(plot_layout)
         controls_layout.addWidget(self.plotGroup)
 
-        # Experiment Settings GroupBox
+        # Recording Settings
         self.expGroup = QtWidgets.QGroupBox("Recording Settings")
         exp_layout = QtWidgets.QFormLayout()
         self.recIdEdit = QtWidgets.QLineEdit()
         exp_layout.addRow("ID:", self.recIdEdit)
         self.recDurEdit = QtWidgets.QLineEdit("60")
         exp_layout.addRow("Duration (s):", self.recDurEdit)
-
-        # Add file splitting checkbox and input
         self.splitFileCheck = QtWidgets.QCheckBox("Enable File Splitting")
         self.splitFileCheck.setChecked(False)
         self.splitFileCheck.stateChanged.connect(self.toggle_split_duration)
@@ -249,24 +237,15 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.expGroup.setLayout(exp_layout)
         controls_layout.addWidget(self.expGroup)
 
-        # Right plotting panel using pyqtgraph
-        # pyqtgraph background and foreground colors
-        # Dark mode
-        # pg.setConfigOption('background', 'k')
-        # pg.setConfigOption('foreground', 'w')
-        # Bright mode
+        # Plotting panel
         pg.setConfigOption('background', 'w')
         pg.setConfigOption('foreground', 'k')
         self.rawPlotWidget = pg.PlotWidget(title="Raw Data")
         self.specPlotWidget = pg.PlotWidget(title="Spectrogram")
         self.specPlotWidget.setMouseEnabled(x=False, y=False)
-        # Set pyqtgraph config for row-major
-        # pg.setConfigOptions(imageAxisOrder='row-major')
-
-        # Layout for plotting
-        plot_layout = QtWidgets.QVBoxLayout()
-        plot_layout.addWidget(self.rawPlotWidget)
-        plot_layout.addWidget(self.specPlotWidget)
+        plot_vlayout = QtWidgets.QVBoxLayout()
+        plot_vlayout.addWidget(self.rawPlotWidget)
+        plot_vlayout.addWidget(self.specPlotWidget)
 
         # Main layout
         main_layout = QtWidgets.QHBoxLayout()
@@ -274,23 +253,24 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         controls_widget.setLayout(controls_layout)
         main_layout.addWidget(controls_widget, 1)
         plot_widget = QtWidgets.QWidget()
-        plot_widget.setLayout(plot_layout)
+        plot_widget.setLayout(plot_vlayout)
         main_layout.addWidget(plot_widget, 3)
         self.setLayout(main_layout)
 
-        # Connect button signals
+        # Connect signals
         self.connectBtn.clicked.connect(self.start_acquisition)
         self.disconnectBtn.clicked.connect(self.stop_acquisition)
         self.recordBtn.clicked.connect(self.start_record)
         self.resetBtn.clicked.connect(self.reset_device)
         self.closeBtn.clicked.connect(QtWidgets.qApp.quit)
 
+    def toggle_split_duration(self):
+        self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
+
     def start_acquisition(self):
-        # Get parameters
         device = self.daqCombo.currentText()
         channel = self.chanEdit.text().strip()
         input_channel = f"{device}/{channel}"
-        # Get and validate inputs
         try:
             sample_rate = int(self.sampleRateEdit.text())
             min_freq = float(self.specMinEdit.text())
@@ -310,7 +290,6 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.max_freq = max_freq
         self.spec_window_size = spec_window_size
 
-        # Disable controls
         self.connectBtn.setEnabled(False)
         self.resetBtn.setEnabled(False)
         self.disconnectBtn.setEnabled(True)
@@ -323,111 +302,84 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specMinEdit.setEnabled(False)
         self.specMaxEdit.setEnabled(False)
         self.specWindowEdit.setEnabled(False)
-        # self.specCheck.setEnabled(False)
 
-        # Instantiate DataAcquisition
         self.acq = DataAcquisition(input_channel, sample_rate, -10, 10, refresh_rate, plot_duration)
-        # Clear buffers
         self.acq.plot_buffer.clear()
         self.acq.storage_buffer.clear()
         self.acq.start()
-        # Start update timer
         interval = int(1000 / refresh_rate)
         self.plot_timer.start(interval)
 
     def update_plot(self):
-        # Update raw data plot
         data = np.array(self.acq.plot_buffer)
         self.rawPlotWidget.clear()
         if data.size > 0:
-            # For dark mode, use 'y' for yellow, for bright mode use 'b' for blue
-            if pg.getConfigOption('background') == 'k':  # Dark mode
-                self.rawPlotWidget.plot(data, pen='y')
-            else:  # Bright mode
-                # Use blue for bright mode
-                self.rawPlotWidget.plot(data, pen='b')
-
+            pen_color = 'y' if pg.getConfigOption('background') == 'k' else 'b'
+            self.rawPlotWidget.plot(data, pen=pen_color)
             self.rawPlotWidget.setLabel('bottom', "Sample", units='s')
             self.rawPlotWidget.setLabel('left', "Voltage", units='V')
             if self.acq.recording_active:
                 self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g', symbolSize=20)
 
-        # --- Spectrogram using scipy.signal.spectrogram and pyqtgraph.ImageItem ---
+        # Spectrogram
         if self.specCheck.isChecked() and data.size > 0 and data.size >= self.spec_window_size:
-            # Only compute if enough data
-            if data.size >= self.spec_window_size:
-                # Use all available data for a rolling spectrogram
-                f, t, Sxx = signal.spectrogram(
-                    data,
-                    fs=self.sample_rate,
-                    window='hann',
-                    nperseg=self.spec_window_size,
-                    noverlap=self.spec_window_size // 2,
-                    detrend=False,
-                    scaling='density',
-                    mode='magnitude'
-                )
+            f, t, Sxx = signal.spectrogram(
+                data,
+                fs=self.sample_rate,
+                window='hann',
+                nperseg=self.spec_window_size,
+                noverlap=self.spec_window_size // 2,
+                detrend=False,
+                scaling='density',
+                mode='magnitude'
+            )
+            freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
+            Sxx = Sxx[freq_mask, :]
+            f = f[freq_mask]
 
-                # Restrict frequency range
-                freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
-                Sxx = Sxx[freq_mask, :]
-                f = f[freq_mask]
+            if self.domFreqCheck.isChecked() and Sxx.size > 0 and f.size > 0:
+                mean_spectrum = np.mean(Sxx, axis=1)
+                dom_idx = np.argmax(mean_spectrum)
+                dom_freq = f[dom_idx]
+                self.domFreqLabel.setText(f"Dominant Frequency: {dom_freq:.1f} Hz")
+                self.specPlotWidget.setTitle(f"Spectrogram (Dominant: {dom_freq:.1f} Hz)")
+            else:
+                self.domFreqLabel.setText("Dominant Frequency: --- Hz")
+                self.specPlotWidget.setTitle("Spectrogram")
 
-                # If dominant frequency display is enabled, compute and show it
-                if self.domFreqCheck.isChecked() and Sxx.size > 0 and f.size > 0:
-                    # Find the frequency bin with the highest mean magnitude
-                    mean_spectrum = np.mean(Sxx, axis=1)
-                    dom_idx = np.argmax(mean_spectrum)
-                    dom_freq = f[dom_idx]
-                    self.domFreqLabel.setText(f"Dominant Frequency: {dom_freq:.1f} Hz")
-                    self.specPlotWidget.setTitle(f"Spectrogram (Dominant: {dom_freq:.1f} Hz)")
-                else:
-                    self.domFreqLabel.setText("Dominant Frequency: --- Hz")
-                    self.specPlotWidget.setTitle("Spectrogram")
+            self.specPlotWidget.clear()
+            if self.img is None or self.img.scene() is None:
+                self.img = pg.ImageItem(axisOrder='row-major')
+            self.specPlotWidget.addItem(self.img)
+            self.img.setImage(Sxx, autoLevels=True)
+            self.img.setLookupTable(self.spectrogram_lut)
 
-                # Remove all items from the plot and add a new ImageItem
-                self.specPlotWidget.clear()
-                if self.img is None or self.img.scene() is None:
-                    self.img = pg.ImageItem(axisOrder='row-major')
-                self.specPlotWidget.addItem(self.img)
-
-                # Set the image data
-                self.img.setImage(Sxx, autoLevels=True)
-
-                # Apply a color map (e.g., 'viridis')
-                self.img.setLookupTable(self.spectrogram_lut)
-
-                # Scale axes to time and frequency, and shift image up by self.min_freq
-                if t.size > 1 and f.size > 1:
-                    xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
-                    yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
-                    transform = QtGui.QTransform()
-                    transform.scale(xscale, yscale)
-                    transform.translate(0, self.min_freq / yscale)  # Shift image up by min_freq
-                    self.img.setTransform(transform)
-                    self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
-                    self.specPlotWidget.setLabel('bottom', "Time", units='s')
-                    self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
+            if t.size > 1 and f.size > 1:
+                xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
+                yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
+                transform = QtGui.QTransform()
+                transform.scale(xscale, yscale)
+                transform.translate(0, self.min_freq / yscale)
+                self.img.setTransform(transform)
+                self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
+                self.specPlotWidget.setLabel('bottom', "Time", units='s')
+                self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
         else:
             self.specPlotWidget.clear()
-        
 
+        # File splitting logic
         if getattr(self, 'split_enabled', False) and self.acq and self.acq.acquired_samples > 0:
             if self.next_split_idx < len(self.split_points):
                 next_split = self.split_points[self.next_split_idx]
                 if self.acq.acquired_samples >= next_split:
-                    # Stop current file writer
                     if self.file_writer is not None:
                         self.file_writer.stop()
                         self.file_writer.join()
-                    # Save log for the previous split
                     self.save_log_file()
-                    # Increment counter and start new file writer
                     self.split_counter += 1
                     self.record_filepath = self._split_filename()
                     self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
                     self.file_writer.start()
-                    # --- Reset flags so callback will set new timestamp and write new log ---
                     self.acq.logfile_written = False
                     self.acq.recording_start_timestamp = None
                     self.next_split_idx += 1
@@ -445,14 +397,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.acq.storage_buffer.clear()
         self.acq.recording_complete_callback = lambda: QtCore.QTimer.singleShot(0, self.on_recording_complete)
         self.acq.recording_active = True
-
-        # Reset logfile_written flag for each new recording
         self.acq.logfile_written = False
-
-        # Set logfile callback to save log file after recording starts
         self.acq.logfile_callback = self.save_log_file
 
-        # --- File splitting logic ---
         self.split_enabled = self.splitFileCheck.isChecked()
         if self.split_enabled:
             try:
@@ -468,18 +415,15 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             self.split_samples = int(self.split_duration * self.acq.sample_rate)
             self.split_counter = 1
             self.base_filepath = os.path.splitext(filepath)[0]
-            self.record_filepath = self._split_filename()  # Always use counter file
-            # Clear the first split file if it exists
+            self.record_filepath = self._split_filename()
             with open(self.record_filepath, 'wb'):
                 pass
             self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
-            # Calculate split points for manual splitting
             total_samples = self.acq.samples_to_save
             self.split_points = [self.split_samples * i for i in range(1, int(np.ceil(total_samples / self.split_samples)))]
             self.next_split_idx = 0
         else:
             self.record_filepath = filepath
-            # Clear file by opening in write-binary mode
             with open(self.record_filepath, 'wb'):
                 pass
             self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
@@ -497,14 +441,11 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
 
     def save_log_file(self):
-        # Save log file alongside the data file.
         log_filename = f"log_{os.path.basename(self.record_filepath).split('.')[0]}.txt"
         log_filepath = os.path.join(os.path.dirname(self.record_filepath), log_filename)
-        # Format timestamp with ms resolution
         if self.acq and self.acq.recording_start_timestamp is not None:
-            from datetime import datetime
             dt = datetime.fromtimestamp(self.acq.recording_start_timestamp)
-            timestamp_str = dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # up to ms
+            timestamp_str = dt.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         else:
             timestamp_str = "N/A"
         log_data = {
@@ -518,9 +459,6 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         with open(log_filepath, 'w') as f:
             for key, value in log_data.items():
                 f.write(f"{key}: {value}\n")
-
-    def toggle_split_duration(self):
-        self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
 
     def stop_acquisition(self):
         if self.acq:
@@ -546,7 +484,6 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             nidaqmx.system.Device(dev).reset_device()
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", str(e))
-
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
