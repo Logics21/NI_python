@@ -219,6 +219,16 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         exp_layout.addRow("ID:", self.recIdEdit)
         self.recDurEdit = QtWidgets.QLineEdit("60")
         exp_layout.addRow("Duration (s):", self.recDurEdit)
+
+        # Add file splitting checkbox and input
+        self.splitFileCheck = QtWidgets.QCheckBox("Enable File Splitting")
+        self.splitFileCheck.setChecked(False)
+        self.splitFileCheck.stateChanged.connect(self.toggle_split_duration)
+        self.splitDurEdit = QtWidgets.QLineEdit("10")
+        self.splitDurEdit.setEnabled(False)
+        exp_layout.addRow(self.splitFileCheck)
+        exp_layout.addRow("Split Duration (s):", self.splitDurEdit)
+
         btn_layout = QtWidgets.QHBoxLayout()
         self.connectBtn = QtWidgets.QPushButton("Connect")
         self.connectBtn.setStyleSheet("color: green; font-weight: bold;")
@@ -402,21 +412,36 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             self.specPlotWidget.clear()
         
 
+        if getattr(self, 'split_enabled', False) and self.acq and self.acq.acquired_samples > 0:
+            if self.next_split_idx < len(self.split_points):
+                next_split = self.split_points[self.next_split_idx]
+                if self.acq.acquired_samples >= next_split:
+                    # Stop current file writer
+                    if self.file_writer is not None:
+                        self.file_writer.stop()
+                        self.file_writer.join()
+                    # Save log for the previous split
+                    self.save_log_file()
+                    # Increment counter and start new file writer
+                    self.split_counter += 1
+                    self.record_filepath = self._split_filename()
+                    self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
+                    self.file_writer.start()
+                    # Reset logfile_written for new split
+                    self.acq.logfile_written = False
+                    self.next_split_idx += 1
+
     def start_record(self):
         self.recordBtn.setEnabled(False)
         filepath, _ = QtWidgets.QFileDialog.getSaveFileName(self, "Save Data", "", "Binary files (*.bin)")
         if not filepath:
             self.recordBtn.setEnabled(True)
             return
-        # Clear file by opening in write-binary mode
-        with open(filepath, 'wb') as f:
-            pass
-        self.record_filepath = filepath
+
         rec_duration = float(self.recDurEdit.text())
         self.acq.samples_to_save = int(rec_duration * self.acq.sample_rate)
         self.acq.acquired_samples = 0
         self.acq.storage_buffer.clear()
-        # Set recording completion callback
         self.acq.recording_complete_callback = lambda: QtCore.QTimer.singleShot(0, self.on_recording_complete)
         self.acq.recording_active = True
 
@@ -426,18 +451,49 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         # Set logfile callback to save log file after recording starts
         self.acq.logfile_callback = self.save_log_file
 
-        # Start FileWriter thread
-        self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, filepath, self.acq.sample_rate)
+        # --- File splitting logic ---
+        self.split_enabled = self.splitFileCheck.isChecked()
+        if self.split_enabled:
+            try:
+                self.split_duration = float(self.splitDurEdit.text())
+            except ValueError:
+                QtWidgets.QMessageBox.warning(self, "Input Error", "Invalid split duration.")
+                self.recordBtn.setEnabled(True)
+                return
+            if self.split_duration >= rec_duration:
+                QtWidgets.QMessageBox.warning(self, "Input Error", "Split duration must be smaller than total duration.")
+                self.recordBtn.setEnabled(True)
+                return
+            self.split_samples = int(self.split_duration * self.acq.sample_rate)
+            self.split_counter = 1
+            self.base_filepath = os.path.splitext(filepath)[0]
+            self.record_filepath = self._split_filename()  # Always use counter file
+            # Clear the first split file if it exists
+            with open(self.record_filepath, 'wb'):
+                pass
+            self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
+            # Calculate split points for manual splitting
+            total_samples = self.acq.samples_to_save
+            self.split_points = [self.split_samples * i for i in range(1, int(np.ceil(total_samples / self.split_samples)))]
+            self.next_split_idx = 0
+        else:
+            self.record_filepath = filepath
+            # Clear file by opening in write-binary mode
+            with open(self.record_filepath, 'wb'):
+                pass
+            self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
         self.file_writer.start()
+
+    def _split_filename(self):
+        return f"{self.base_filepath}_{self.split_counter:03d}.bin"
 
     def on_recording_complete(self):
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
-        self.acq.recording_start_timestamp = None  # Reset timestamp after recording
+        self.acq.recording_start_timestamp = None
         self.recordBtn.setEnabled(True)
         QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
-
 
     def save_log_file(self):
         # Save log file alongside the data file.
@@ -461,6 +517,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         with open(log_filepath, 'w') as f:
             for key, value in log_data.items():
                 f.write(f"{key}: {value}\n")
+
+    def toggle_split_duration(self):
+        self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
 
     def stop_acquisition(self):
         if self.acq:
