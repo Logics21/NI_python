@@ -427,8 +427,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                     self.record_filepath = self._split_filename()
                     self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
                     self.file_writer.start()
-                    # Reset logfile_written for new split
+                    # --- Reset flags so callback will set new timestamp and write new log ---
                     self.acq.logfile_written = False
+                    self.acq.recording_start_timestamp = None
                     self.next_split_idx += 1
 
     def start_record(self):
