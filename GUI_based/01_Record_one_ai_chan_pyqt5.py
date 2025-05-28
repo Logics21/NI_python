@@ -13,12 +13,8 @@ import nidaqmx
 from nidaqmx import constants
 import pyqtgraph as pg
 from pyqtgraph import ImageItem
-import pandas as pd
-import pyarrow.parquet as pq
-import pyarrow as pa
 from PyQt5 import QtWidgets, QtCore, QtGui
 from scipy import signal
-from scipy.signal import spectrogram
 
 
 # Get list of DAQ device names
@@ -42,7 +38,7 @@ def compute_dominant_frequency(data, sample_rate, min_freq, max_freq):
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
     def __init__(self, input_channel, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration):
-        self.input_channel = input_channel  # Expected to be like "Dev2/ai5"
+        self.input_channel = input_channel
         self.sample_rate = sample_rate
         self.min_voltage = min_voltage
         self.max_voltage = max_voltage
@@ -55,7 +51,6 @@ class DataAcquisition:
                 if buffer_size % divisor == 0:
                     sample_interval = divisor
                     break
-            print(f"Adjusted sample_interval for compatibility: {sample_interval}")
         self.sample_interval = sample_interval
 
         # Buffers for plotting and file writing
@@ -78,6 +73,7 @@ class DataAcquisition:
         self.recording_complete_callback = None
         self.recording_start_timestamp = None
         self.logfile_written = False
+        self.logfile_callback = None
 
     def start(self):
         self.running = True
@@ -112,7 +108,7 @@ class DataAcquisition:
                 self.recording_start_timestamp = time.time() - (n_samples - 1) / self.sample_rate
             # Save logfile only once, right after timestamp is set
             if not self.logfile_written and self.recording_start_timestamp is not None:
-                if hasattr(self, 'logfile_callback'):
+                if self.logfile_callback:
                     self.logfile_callback()
                 self.logfile_written = True
             if self.acquired_samples + n_samples >= self.samples_to_save:
@@ -287,45 +283,24 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         input_channel = f"{device}/{channel}"
         # Get and validate inputs
         try:
-            self.sample_rate = int(self.sampleRateEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Sample Rate must be a valid integer.")
-            return
-        try:
-            self.min_freq = float(self.specMinEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Min Frequency must be a valid number.")
-            return
-        try:
-            self.max_freq = float(self.specMaxEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Max Frequency must be a valid float.")
-            return
-        try:
+            sample_rate = int(self.sampleRateEdit.text())
+            min_freq = float(self.specMinEdit.text())
+            max_freq = float(self.specMaxEdit.text())
             refresh_rate = int(self.refreshRateEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Refresh Rate must be a valid integer.")
-            return
-        try:
             plot_duration = float(self.plotDurEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Plot Duration must be a valid float.")
+            spec_window_size = 2 ** int(self.specWindowEdit.text())
+        except ValueError as e:
+            QtWidgets.QMessageBox.warning(self, "Input Error", f"Invalid input: {e}")
             return
-        try:
-            self.spec_window_size = 2 ** int(self.specWindowEdit.text())
-        except ValueError:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Spectrogram Window Size Exponent must be a valid integer.")
+        if sample_rate <= 0 or refresh_rate <= 0 or plot_duration <= 0:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Sample Rate, Refresh Rate, and Plot Duration must be positive.")
             return
-        if self.sample_rate <= 0:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Sample Rate must be a positive number.")
-            return
-        if refresh_rate <= 0:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Refresh Rate must be greater than zero.")
-            return
-        if plot_duration <= 0:
-            QtWidgets.QMessageBox.warning(self, "Input Error", "Plot Duration must be greater than zero.")
-            return
-            
+
+        self.sample_rate = sample_rate
+        self.min_freq = min_freq
+        self.max_freq = max_freq
+        self.spec_window_size = spec_window_size
+
         # Disable controls
         self.connectBtn.setEnabled(False)
         self.resetBtn.setEnabled(False)
@@ -342,7 +317,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specCheck.setEnabled(False)
 
         # Instantiate DataAcquisition
-        self.acq = DataAcquisition(input_channel, self.sample_rate, -10, 10, refresh_rate, plot_duration)
+        self.acq = DataAcquisition(input_channel, sample_rate, -10, 10, refresh_rate, plot_duration)
         # Clear buffers
         self.acq.plot_buffer.clear()
         self.acq.storage_buffer.clear()
@@ -369,7 +344,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                 self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g', symbolSize=20)
 
         # --- Spectrogram using scipy.signal.spectrogram and pyqtgraph.ImageItem ---
-        if self.specCheck.isChecked() and data.size > 0:
+        if self.specCheck.isChecked() and data.size > 0 and data.size >= self.spec_window_size:
             # Only compute if enough data
             if data.size >= self.spec_window_size:
                 # Use all available data for a rolling spectrogram
@@ -391,7 +366,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
                 # Remove all items from the plot and add a new ImageItem
                 self.specPlotWidget.clear()
-                self.img = pg.ImageItem(axisOrder='row-major')
+                if self.img is None or self.img.scene() is None:
+                    self.img = pg.ImageItem(axisOrder='row-major')
                 self.specPlotWidget.addItem(self.img)
 
                 # Set the image data
