@@ -165,6 +165,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.buffer_lock = threading.Lock()
         self.plot_timer = QtCore.QTimer(self)
         self.plot_timer.timeout.connect(self.update_plot)
+        self.spectrogram_lut = pg.colormap.get('viridis').getLookupTable(0.0, 1.0, 256)
+        self.img = None
         self.init_ui()
 
     def init_ui(self):
@@ -218,7 +220,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.recordBtn = QtWidgets.QPushButton("● Record")
         self.recordBtn.setStyleSheet("color: red; font-weight: bold;")
         self.resetBtn = QtWidgets.QPushButton("Reset DAQ")
+        self.resetBtn.setStyleSheet("color: black; font-weight: bold;")
         self.closeBtn = QtWidgets.QPushButton("Close")
+        self.closeBtn.setStyleSheet("color: black; font-weight: bold;")
         btn_layout.addWidget(self.connectBtn)
         btn_layout.addWidget(self.disconnectBtn)
         btn_layout.addWidget(self.recordBtn)
@@ -229,9 +233,18 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         controls_layout.addWidget(self.expGroup)
 
         # Right plotting panel using pyqtgraph
+        # pyqtgraph background and foreground colors
+        # Dark mode
+        # pg.setConfigOption('background', 'k')
+        # pg.setConfigOption('foreground', 'w')
+        # Bright mode
+        pg.setConfigOption('background', 'w')
+        pg.setConfigOption('foreground', 'k')
         self.rawPlotWidget = pg.PlotWidget(title="Raw Data")
         self.specPlotWidget = pg.PlotWidget(title="Spectrogram")
         self.specPlotWidget.setMouseEnabled(x=False, y=False)
+        # Set pyqtgraph config for row-major
+        # pg.setConfigOptions(imageAxisOrder='row-major')
 
         # Layout for plotting
         plot_layout = QtWidgets.QVBoxLayout()
@@ -256,6 +269,51 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.closeBtn.clicked.connect(QtWidgets.qApp.quit)
 
     def start_acquisition(self):
+        # Get parameters
+        device = self.daqCombo.currentText()
+        channel = self.chanEdit.text().strip()
+        input_channel = f"{device}/{channel}"
+        # Get and validate inputs
+        try:
+            self.sample_rate = int(self.sampleRateEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Sample Rate must be a valid integer.")
+            return
+        try:
+            self.min_freq = float(self.specMinEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Min Frequency must be a valid number.")
+            return
+        try:
+            self.max_freq = float(self.specMaxEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Max Frequency must be a valid float.")
+            return
+        try:
+            refresh_rate = int(self.refreshRateEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Refresh Rate must be a valid integer.")
+            return
+        try:
+            plot_duration = float(self.plotDurEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Plot Duration must be a valid float.")
+            return
+        try:
+            self.spec_window_size = 2 ** int(self.specWindowEdit.text())
+        except ValueError:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Spectrogram Window Size Exponent must be a valid integer.")
+            return
+        if self.sample_rate <= 0:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Sample Rate must be a positive number.")
+            return
+        if refresh_rate <= 0:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Refresh Rate must be greater than zero.")
+            return
+        if plot_duration <= 0:
+            QtWidgets.QMessageBox.warning(self, "Input Error", "Plot Duration must be greater than zero.")
+            return
+            
         # Disable controls
         self.connectBtn.setEnabled(False)
         self.resetBtn.setEnabled(False)
@@ -271,15 +329,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specWindowEdit.setEnabled(False)
         self.specCheck.setEnabled(False)
 
-        # Get parameters
-        device = self.daqCombo.currentText()
-        channel = self.chanEdit.text().strip()
-        input_channel = f"{device}/{channel}"
-        sample_rate = int(self.sampleRateEdit.text())
-        refresh_rate = int(self.refreshRateEdit.text())
-        plot_duration = float(self.plotDurEdit.text())
         # Instantiate DataAcquisition
-        self.acq = DataAcquisition(input_channel, sample_rate, -10, 10, refresh_rate, plot_duration)
+        self.acq = DataAcquisition(input_channel, self.sample_rate, -10, 10, refresh_rate, plot_duration)
         # Clear buffers
         self.acq.plot_buffer.clear()
         self.acq.storage_buffer.clear()
@@ -293,64 +344,54 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         data = np.array(self.acq.plot_buffer)
         self.rawPlotWidget.clear()
         if data.size > 0:
-            self.rawPlotWidget.plot(data, pen='y')
+            # self.rawPlotWidget.plot(data, pen='y')
+            self.rawPlotWidget.plot(data, pen='b')
+            self.rawPlotWidget.setLabel('bottom', "Sample", units='s')
+            self.rawPlotWidget.setLabel('left', "Voltage", units='V')
             if self.acq.recording_active:
-                self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g')
+                self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g', symbolSize=20)
 
         # --- Spectrogram using scipy.signal.spectrogram and pyqtgraph.ImageItem ---
         if self.specCheck.isChecked() and data.size > 0:
-            try:
-                fft_size = 2 ** int(self.specWindowEdit.text())
-            except Exception:
-                fft_size = 1024
-
-            min_freq = float(self.specMinEdit.text())
-            max_freq = float(self.specMaxEdit.text())
-            sample_rate = self.acq.sample_rate
-
             # Only compute if enough data
-            if data.size >= fft_size:
+            if data.size >= self.spec_window_size:
                 # Use all available data for a rolling spectrogram
                 f, t, Sxx = signal.spectrogram(
                     data,
-                    fs=sample_rate,
+                    fs=self.sample_rate,
                     window='hann',
-                    nperseg=fft_size,
-                    noverlap=fft_size // 2,
+                    nperseg=self.spec_window_size,
+                    noverlap=self.spec_window_size // 2,
                     detrend=False,
                     scaling='density',
                     mode='magnitude'
                 )
 
                 # Restrict frequency range
-                freq_mask = (f >= min_freq) & (f <= max_freq)
-                # Sxx = Sxx[freq_mask, :]
-                # f = f[freq_mask]
-
-                # Set pyqtgraph config for row-major
-                pg.setConfigOptions(imageAxisOrder='row-major')
+                freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
+                Sxx = Sxx[freq_mask, :]
+                f = f[freq_mask]
 
                 # Remove all items from the plot and add a new ImageItem
                 self.specPlotWidget.clear()
-                img = pg.ImageItem(axisOrder='row-major')
-                self.specPlotWidget.addItem(img)
+                self.img = pg.ImageItem(axisOrder='row-major')
+                self.specPlotWidget.addItem(self.img)
 
                 # Set the image data
-                img.setImage(Sxx, autoLevels=True)
+                self.img.setImage(Sxx, autoLevels=True)
 
                 # Apply a color map (e.g., 'viridis')
-                lut = pg.colormap.get('viridis').getLookupTable(0.0, 1.0, 256)
-                img.setLookupTable(lut)
+                self.img.setLookupTable(self.spectrogram_lut)
 
-                # Scale axes to time and frequency
+                # Scale axes to time and frequency, and shift image up by self.min_freq
                 if t.size > 1 and f.size > 1:
-                    img.resetTransform()
                     xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
                     yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
                     transform = QtGui.QTransform()
                     transform.scale(xscale, yscale)
-                    img.setTransform(transform)
-                    self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=min_freq, yMax=max_freq)
+                    transform.translate(0, self.min_freq / yscale)  # Shift image up by min_freq
+                    self.img.setTransform(transform)
+                    self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
                     self.specPlotWidget.setLabel('bottom', "Time", units='s')
                     self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
         else:
@@ -381,11 +422,12 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.save_log_file()
 
     def on_recording_complete(self):
-        self.recordBtn.setEnabled(True)
-        QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
         if self.file_writer is not None:
             self.file_writer.stop()
             self.file_writer.join()
+        self.recordBtn.setEnabled(True)
+        QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
+
         # self.save_log_file()
 
     def save_log_file(self):
