@@ -204,12 +204,12 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         controls_layout.addWidget(self.plotGroup)
 
         # Experiment Settings GroupBox
-        self.expGroup = QtWidgets.QGroupBox("Experiment Settings")
+        self.expGroup = QtWidgets.QGroupBox("Recording Settings")
         exp_layout = QtWidgets.QFormLayout()
         self.recIdEdit = QtWidgets.QLineEdit()
-        exp_layout.addRow("Recording ID:", self.recIdEdit)
+        exp_layout.addRow("ID:", self.recIdEdit)
         self.recDurEdit = QtWidgets.QLineEdit("60")
-        exp_layout.addRow("Record Duration (s):", self.recDurEdit)
+        exp_layout.addRow("Duration (s):", self.recDurEdit)
         btn_layout = QtWidgets.QHBoxLayout()
         self.startBtn = QtWidgets.QPushButton("Start")
         self.stopBtn = QtWidgets.QPushButton("Stop")
@@ -227,10 +227,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
         # Right plotting panel using pyqtgraph
         self.rawPlotWidget = pg.PlotWidget(title="Raw Data")
-        # self.specPlotWidget = pg.ImageView(view=pg.PlotItem(title="Spectrogram"))
         self.specPlotWidget = pg.PlotWidget(title="Spectrogram")
-        # self.imageItem = pg.ImageItem(axisOrder='col-major') # this arg is purely for performance
-        # self.specPlotWidget.addItem(self.imageItem)
         self.specPlotWidget.setMouseEnabled(x=False, y=False)
 
         # Layout for plotting
@@ -337,6 +334,10 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                 # Set the image data
                 img.setImage(Sxx, autoLevels=True)
 
+                # Apply a color map (e.g., 'viridis')
+                lut = pg.colormap.get('viridis').getLookupTable(0.0, 1.0, 256)
+                img.setLookupTable(lut)
+
                 # Scale axes to time and frequency
                 if t.size > 1 and f.size > 1:
                     img.resetTransform()
@@ -388,11 +389,11 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         log_filename = f"log_{os.path.basename(self.record_filepath).split('.')[0]}.txt"
         log_filepath = os.path.join(os.path.dirname(self.record_filepath), log_filename)
         log_data = {
-            "Number of Input Channels": 1,
-            "Sample Rate": self.acq.sample_rate,
-            "Recording ID": self.recIdEdit.text(),
-            "Recording Duration": self.recDurEdit.text(),
-            "Input Channel": self.chanEdit.text()
+            "N_Input_Channels": 1,
+            "Sample_Rate": self.acq.sample_rate,
+            "Recording_ID": self.recIdEdit.text(),
+            "Recording_Duration": self.recDurEdit.text(),
+            "Input_Channel": self.chanEdit.text()
         }
         with open(log_filepath, 'w') as f:
             for key, value in log_data.items():
