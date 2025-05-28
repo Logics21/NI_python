@@ -24,17 +24,6 @@ if len(daqList) == 0:
     raise ValueError('No DAQ detected, check connection.')
 
 
-def compute_dominant_frequency(data, sample_rate, min_freq, max_freq):
-    """Compute the dominant frequency of a quasi-sinusoidal signal within specified bounds."""
-    fft_result = np.fft.rfft(data)
-    frequencies = np.fft.rfftfreq(len(data), d=1/sample_rate)
-    valid_indices = np.where((frequencies >= min_freq) & (frequencies <= max_freq))
-    filtered_frequencies = frequencies[valid_indices]
-    filtered_fft_result = np.abs(fft_result[valid_indices])
-    dominant_freq = filtered_frequencies[np.argmax(filtered_fft_result)]
-    return dominant_freq
-
-
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
     def __init__(self, input_channel, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration):
@@ -210,6 +199,16 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram")
         self.specCheck.setChecked(True)
         plot_layout.addRow(self.specCheck)
+
+        # Add checkbox for dominant frequency display
+        self.domFreqCheck = QtWidgets.QCheckBox("Show Dominant Frequency")
+        self.domFreqCheck.setChecked(True)
+        plot_layout.addRow(self.domFreqCheck)
+
+        # Add a label to display the dominant frequency
+        self.domFreqLabel = QtWidgets.QLabel("Dominant Frequency: --- Hz")
+        plot_layout.addRow(self.domFreqLabel)
+
         self.plotGroup.setLayout(plot_layout)
         controls_layout.addWidget(self.plotGroup)
 
@@ -314,7 +313,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specMinEdit.setEnabled(False)
         self.specMaxEdit.setEnabled(False)
         self.specWindowEdit.setEnabled(False)
-        self.specCheck.setEnabled(False)
+        # self.specCheck.setEnabled(False)
 
         # Instantiate DataAcquisition
         self.acq = DataAcquisition(input_channel, sample_rate, -10, 10, refresh_rate, plot_duration)
@@ -363,6 +362,18 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                 freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
                 Sxx = Sxx[freq_mask, :]
                 f = f[freq_mask]
+
+                # If dominant frequency display is enabled, compute and show it
+                if self.domFreqCheck.isChecked() and Sxx.size > 0 and f.size > 0:
+                    # Find the frequency bin with the highest mean magnitude
+                    mean_spectrum = np.mean(Sxx, axis=1)
+                    dom_idx = np.argmax(mean_spectrum)
+                    dom_freq = f[dom_idx]
+                    self.domFreqLabel.setText(f"Dominant Frequency: {dom_freq:.1f} Hz")
+                    self.specPlotWidget.setTitle(f"Spectrogram (Dominant: {dom_freq:.1f} Hz)")
+                else:
+                    self.domFreqLabel.setText("Dominant Frequency: --- Hz")
+                    self.specPlotWidget.setTitle("Spectrogram")
 
                 # Remove all items from the plot and add a new ImageItem
                 self.specPlotWidget.clear()
