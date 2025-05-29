@@ -24,7 +24,11 @@ from datetime import datetime
 daqSys = nidaqmx.system.System()
 daqList = daqSys.devices.device_names
 if not daqList:
-    raise ValueError('No DAQ detected, check connection.')
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        app = QtWidgets.QApplication(sys.argv)
+    QtWidgets.QMessageBox.critical(None, "DAQ Error", "No DAQ detected, check connection.")
+    sys.exit(1)
 
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
