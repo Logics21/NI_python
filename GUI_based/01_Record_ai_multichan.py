@@ -289,7 +289,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.disconnectBtn.clicked.connect(self.stop_acquisition)
         self.recordBtn.clicked.connect(self.start_record)
         self.resetBtn.clicked.connect(self.reset_device)
-        self.closeBtn.clicked.connect(QtWidgets.qApp.quit)
+        self.closeBtn.clicked.connect(self.safe_close)
 
     def toggle_split_duration(self):
         self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
@@ -529,6 +529,33 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             nidaqmx.system.Device(dev).reset_device()
         except Exception as e:
             QtWidgets.QMessageBox.warning(self, "Error", str(e))
+
+    def safe_close(self):
+        # Stop and close the DAQ task if still running
+        if hasattr(self, "acq") and self.acq is not None:
+            try:
+                if getattr(self.acq, "ai_task", None) is not None:
+                    if self.acq.running:
+                        self.acq.stop()
+                    else:
+                        try:
+                            self.acq.ai_task.stop()
+                        except Exception:
+                            pass
+                        try:
+                            self.acq.ai_task.close()
+                        except Exception:
+                            pass
+            except Exception as e:
+                print(f"Error during safe close (DAQ): {e}")
+        # Stop file writer thread if running
+        if hasattr(self, "file_writer") and self.file_writer is not None:
+            try:
+                self.file_writer.stop()
+                self.file_writer.join(timeout=2)
+            except Exception as e:
+                print(f"Error stopping file writer: {e}")
+        QtWidgets.qApp.quit()
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
