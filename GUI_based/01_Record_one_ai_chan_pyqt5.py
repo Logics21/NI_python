@@ -32,13 +32,16 @@ if not daqList:
 
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
-    def __init__(self, input_channel, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration):
-        self.input_channel = input_channel
+    def __init__(self, input_channels, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration):
+        # input_channels: list of strings
+        self.input_channels = input_channels
         self.sample_rate = sample_rate
         self.min_voltage = min_voltage
         self.max_voltage = max_voltage
         self.refresh_rate = refresh_rate
 
+        self.num_channels = len(input_channels)
+        print(self.num_channels)
         sample_interval = int(self.sample_rate / self.refresh_rate)
         buffer_size = 100000
         if buffer_size % sample_interval != 0:
@@ -48,15 +51,17 @@ class DataAcquisition:
                     break
         self.sample_interval = sample_interval
 
-        self.plot_buffer = collections.deque(maxlen=int(plot_duration * self.sample_rate))
-        self.storage_buffer = collections.deque()
+        # One buffer per channel
+        self.plot_buffer = [collections.deque(maxlen=int(plot_duration * self.sample_rate)) for _ in range(self.num_channels)]
+        self.storage_buffer = [collections.deque() for _ in range(self.num_channels)]
 
-        self.task = nidaqmx.Task()
-        self.task.ai_channels.add_ai_voltage_chan(
-            self.input_channel, min_val=self.min_voltage, max_val=self.max_voltage,
-            units=constants.VoltageUnits.VOLTS)
-        self.task.timing.cfg_samp_clk_timing(self.sample_rate, sample_mode=constants.AcquisitionType.CONTINUOUS)
-        self.task.register_every_n_samples_acquired_into_buffer_event(self.sample_interval, self.callback)
+        self.ai_task = nidaqmx.Task()
+        for ch in input_channels:
+            self.ai_task.ai_channels.add_ai_voltage_chan(
+                ch, min_val=self.min_voltage, max_val=self.max_voltage,
+                units=constants.VoltageUnits.VOLTS)
+        self.ai_task.timing.cfg_samp_clk_timing(self.sample_rate, sample_mode=constants.AcquisitionType.CONTINUOUS)
+        self.ai_task.register_every_n_samples_acquired_into_buffer_event(self.sample_interval, self.callback)
         self.running = False
 
         self.recording_active = False
@@ -71,7 +76,7 @@ class DataAcquisition:
         self.running = True
         self.recording_start_timestamp = None
         self.logfile_written = False
-        self.task.start()
+        self.ai_task.start()
 
     def stop(self):
         self.running = False
@@ -81,19 +86,28 @@ class DataAcquisition:
                 self.recording_complete_callback()
         self.recording_start_timestamp = None
         try:
-            self.task.stop()
-            self.task.close()
+            self.ai_task.stop()
+            self.ai_task.close()
         except Exception as e:
             print("Error stopping DAQ task:", e)
 
     def callback(self, task_handle, event_type, number_of_samples, callback_data):
         if not self.running:
             return 0
-        temp_data = self.task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
-        self.plot_buffer.extend(temp_data)
+        temp_data = self.ai_task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
 
+        # temp_data shape: (num_channels, n_samples)
+        if self.num_channels == 1:
+            temp_data = np.array([temp_data])  # shape (1, n_samples)
+        else:
+            temp_data = np.array(temp_data)
+        # print(f"num_channels={self.num_channels}, len(plot_buffer)={len(self.plot_buffer)}, len(storage_buffer)={len(self.storage_buffer)}, temp_data.shape={temp_data.shape}")
+
+        # Extend buffers per channel
+        for ch_idx in range(self.num_channels):
+            self.plot_buffer[ch_idx].extend(temp_data[ch_idx])
         if self.recording_active:
-            n_samples = len(temp_data)
+            n_samples = temp_data.shape[1]
             if self.recording_start_timestamp is None:
                 self.recording_start_timestamp = time.time() - (n_samples - 1) / self.sample_rate
             if not self.logfile_written and self.recording_start_timestamp is not None:
@@ -103,12 +117,13 @@ class DataAcquisition:
             if self.acquired_samples + n_samples >= self.samples_to_save:
                 diff = (self.acquired_samples + n_samples) - self.samples_to_save
                 n_samples = n_samples - diff
-                temp_data = temp_data[:n_samples]
+                temp_data = temp_data[:, :n_samples]
                 recording_complete = True
             else:
                 recording_complete = False
 
-            self.storage_buffer.extend(temp_data)
+            for ch_idx in range(self.num_channels):
+                self.storage_buffer[ch_idx].extend(temp_data[ch_idx])
             self.acquired_samples += n_samples
 
             if recording_complete:
@@ -121,7 +136,7 @@ class DataAcquisition:
 class FileWriter(threading.Thread):
     def __init__(self, storage_buffer, buffer_lock, filepath, sample_rate, flush_interval=5):
         super().__init__(daemon=True)
-        self.storage_buffer = storage_buffer
+        self.storage_buffer = storage_buffer  # List of deques, one per channel
         self.buffer_lock = buffer_lock
         self.filepath = filepath
         self.sample_rate = sample_rate
@@ -135,14 +150,17 @@ class FileWriter(threading.Thread):
             while not self.stop_event.is_set():
                 time.sleep(self.flush_interval)
                 with self.buffer_lock:
-                    if not self.storage_buffer:
+                    # Find minimum available samples across all channels
+                    min_len = min(len(buf) for buf in self.storage_buffer)
+                    if min_len == 0:
                         continue
-                    data_chunk = np.array(self.storage_buffer, dtype='f8')
-                    self.storage_buffer.clear()
-                n_samples = len(data_chunk)
+                    # Pop min_len samples from each channel
+                    data_chunk = np.array([ [self.storage_buffer[ch].popleft() for _ in range(min_len)] for ch in range(len(self.storage_buffer)) ])
+                n_samples = min_len
                 time_vec = (acquired_samples + np.arange(n_samples)) * dt
                 acquired_samples += n_samples
-                interleaved = np.column_stack((time_vec, data_chunk)).flatten()
+                # Stack as columns: time, ch1, ch2, ...
+                interleaved = np.column_stack((time_vec, data_chunk.T))  # shape (n_samples, num_channels+1)
                 interleaved.tofile(f)
                 f.flush()
                 os.fsync(f.fileno())
@@ -273,8 +291,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
 
     def start_acquisition(self):
         device = self.daqCombo.currentText()
-        channel = self.chanEdit.text().strip()
-        input_channel = f"{device}/{channel}"
+        # Accept comma or whitespace separated channels, strip whitespace
+        channel_text = self.chanEdit.text().strip()
+        channel_list = [f"{device}/{ch.strip()}" for ch in channel_text.replace(',', ' ').split()]
         try:
             sample_rate = int(self.sampleRateEdit.text())
             min_freq = float(self.specMinEdit.text())
@@ -307,67 +326,76 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specMaxEdit.setEnabled(False)
         self.specWindowEdit.setEnabled(False)
 
-        self.acq = DataAcquisition(input_channel, sample_rate, -10, 10, refresh_rate, plot_duration)
-        self.acq.plot_buffer.clear()
-        self.acq.storage_buffer.clear()
+        self.acq = DataAcquisition(channel_list, sample_rate, -10, 10, refresh_rate, plot_duration)
+        for buf in self.acq.plot_buffer:
+            buf.clear()
+        for buf in self.acq.storage_buffer:
+            buf.clear()
         self.acq.start()
         interval = int(1000 / refresh_rate)
         self.plot_timer.start(interval)
 
     def update_plot(self):
-        data = np.array(self.acq.plot_buffer)
+        # Plot all channels, color-coded
         self.rawPlotWidget.clear()
-        if data.size > 0:
-            pen_color = 'y' if pg.getConfigOption('background') == 'k' else 'b'
-            self.rawPlotWidget.plot(data, pen=pen_color)
+        if self.acq and self.acq.plot_buffer:
+            colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
+            for ch_idx, buf in enumerate(self.acq.plot_buffer):
+                data = np.array(buf)
+                if data.size > 0:
+                    color = colors[ch_idx % len(colors)]
+                    pen = pg.mkPen(color=color, width=2)
+                    self.rawPlotWidget.plot(data, pen=pen, name=f"Ch{ch_idx+1}")
             self.rawPlotWidget.setLabel('bottom', "Sample", units='s')
             self.rawPlotWidget.setLabel('left', "Voltage", units='V')
-            if self.acq.recording_active:
-                self.rawPlotWidget.plot([len(data)], [0], pen=None, symbol='o', symbolBrush='g', symbolSize=20)
 
-        # Spectrogram
-        if self.specCheck.isChecked() and data.size > 0 and data.size >= self.spec_window_size:
-            f, t, Sxx = signal.spectrogram(
-                data,
-                fs=self.sample_rate,
-                window='hann',
-                nperseg=self.spec_window_size,
-                noverlap=self.spec_window_size // 2,
-                detrend=False,
-                scaling='density',
-                mode='magnitude'
-            )
-            freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
-            Sxx = Sxx[freq_mask, :]
-            f = f[freq_mask]
+        # Spectrogram: only for first channel (for simplicity)
+        if self.acq and self.acq.plot_buffer and self.specCheck.isChecked():
+            data = np.array(self.acq.plot_buffer[0])
+            if data.size > 0 and data.size >= self.spec_window_size:
+                f, t, Sxx = signal.spectrogram(
+                    data,
+                    fs=self.sample_rate,
+                    window='hann',
+                    nperseg=self.spec_window_size,
+                    noverlap=self.spec_window_size // 2,
+                    detrend=False,
+                    scaling='density',
+                    mode='magnitude'
+                )
+                freq_mask = (f >= self.min_freq) & (f <= self.max_freq)
+                Sxx = Sxx[freq_mask, :]
+                f = f[freq_mask]
 
-            if self.domFreqCheck.isChecked() and Sxx.size > 0 and f.size > 0:
-                mean_spectrum = np.mean(Sxx, axis=1)
-                dom_idx = np.argmax(mean_spectrum)
-                dom_freq = f[dom_idx]
-                self.domFreqLabel.setText(f"Dominant Frequency: {dom_freq:.1f} Hz")
-                self.specPlotWidget.setTitle(f"Spectrogram (Dominant: {dom_freq:.1f} Hz)")
+                if self.domFreqCheck.isChecked() and Sxx.size > 0 and f.size > 0:
+                    mean_spectrum = np.mean(Sxx, axis=1)
+                    dom_idx = np.argmax(mean_spectrum)
+                    dom_freq = f[dom_idx]
+                    self.domFreqLabel.setText(f"Dominant Frequency: {dom_freq:.1f} Hz")
+                    self.specPlotWidget.setTitle(f"Spectrogram (Dominant: {dom_freq:.1f} Hz)")
+                else:
+                    self.domFreqLabel.setText("Dominant Frequency: --- Hz")
+                    self.specPlotWidget.setTitle("Spectrogram")
+
+                self.specPlotWidget.clear()
+                if self.img is None or self.img.scene() is None:
+                    self.img = pg.ImageItem(axisOrder='row-major')
+                self.specPlotWidget.addItem(self.img)
+                self.img.setImage(Sxx, autoLevels=True)
+                self.img.setLookupTable(self.spectrogram_lut)
+
+                if t.size > 1 and f.size > 1:
+                    xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
+                    yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
+                    transform = QtGui.QTransform()
+                    transform.scale(xscale, yscale)
+                    transform.translate(0, self.min_freq / yscale)
+                    self.img.setTransform(transform)
+                    self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
+                    self.specPlotWidget.setLabel('bottom', "Time", units='s')
+                    self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
             else:
-                self.domFreqLabel.setText("Dominant Frequency: --- Hz")
-                self.specPlotWidget.setTitle("Spectrogram")
-
-            self.specPlotWidget.clear()
-            if self.img is None or self.img.scene() is None:
-                self.img = pg.ImageItem(axisOrder='row-major')
-            self.specPlotWidget.addItem(self.img)
-            self.img.setImage(Sxx, autoLevels=True)
-            self.img.setLookupTable(self.spectrogram_lut)
-
-            if t.size > 1 and f.size > 1:
-                xscale = (t[-1] - t[0]) / float(Sxx.shape[1]) if Sxx.shape[1] > 1 else 1
-                yscale = (f[-1] - f[0]) / float(Sxx.shape[0]) if Sxx.shape[0] > 1 else 1
-                transform = QtGui.QTransform()
-                transform.scale(xscale, yscale)
-                transform.translate(0, self.min_freq / yscale)
-                self.img.setTransform(transform)
-                self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
-                self.specPlotWidget.setLabel('bottom', "Time", units='s')
-                self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
+                self.specPlotWidget.clear()
         else:
             self.specPlotWidget.clear()
 
@@ -398,7 +426,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         rec_duration = float(self.recDurEdit.text())
         self.acq.samples_to_save = int(rec_duration * self.acq.sample_rate)
         self.acq.acquired_samples = 0
-        self.acq.storage_buffer.clear()
+        for buf in self.acq.storage_buffer:
+            buf.clear()
         self.acq.recording_complete_callback = lambda: QtCore.QTimer.singleShot(0, self.on_recording_complete)
         self.acq.recording_active = True
         self.acq.logfile_written = False
@@ -453,11 +482,11 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         else:
             timestamp_str = "N/A"
         log_data = {
-            "N_Input_Channels": 1,
+            "N_Input_Channels": self.acq.num_channels,
             "Sample_Rate": self.acq.sample_rate,
             "Recording_ID": self.recIdEdit.text(),
             "Recording_Duration": self.recDurEdit.text(),
-            "Input_Channel": self.chanEdit.text(),
+            "Input_Channels": ', '.join(self.acq.input_channels),
             "Recording_Start_Timestamp": timestamp_str
         }
         with open(log_filepath, 'w') as f:
