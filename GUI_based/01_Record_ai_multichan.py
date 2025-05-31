@@ -41,7 +41,6 @@ class DataAcquisition:
         self.refresh_rate = refresh_rate
 
         self.num_channels = len(input_channels)
-        print(self.num_channels)
         sample_interval = int(self.sample_rate / self.refresh_rate)
         buffer_size = 100000
         if buffer_size % sample_interval != 0:
@@ -213,7 +212,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         plot_layout.addRow("Max Freq (Hz):", self.specMaxEdit)
         self.specWindowEdit = QtWidgets.QLineEdit("11")
         plot_layout.addRow("Spec. Window Size Exponent:", self.specWindowEdit)
-        self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram")
+        self.specCheck = QtWidgets.QCheckBox("Plot Spectrogram (Ch1 only)")
+        self.specCheck.setToolTip("Enable to plot the spectrogram for the first channel.")
         self.specCheck.setChecked(True)
         plot_layout.addRow(self.specCheck)
         self.domFreqCheck = QtWidgets.QCheckBox("Show Dominant Frequency")
@@ -221,6 +221,11 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         plot_layout.addRow(self.domFreqCheck)
         self.domFreqLabel = QtWidgets.QLabel("Dominant Frequency: --- Hz")
         plot_layout.addRow(self.domFreqLabel)
+        self.yOffsetEdit = QtWidgets.QDoubleSpinBox()
+        self.yOffsetEdit.setRange(0.0, 1000.0)
+        self.yOffsetEdit.setSingleStep(0.1)
+        self.yOffsetEdit.setValue(2.0)
+        plot_layout.addRow("Y Offset (V):", self.yOffsetEdit)
         self.plotGroup.setLayout(plot_layout)
         controls_layout.addWidget(self.plotGroup)
 
@@ -336,18 +341,25 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.plot_timer.start(interval)
 
     def update_plot(self):
-        # Plot all channels, color-coded
+        # Plot all channels, color-coded, with adjustable y-offset for clarity
         self.rawPlotWidget.clear()
         if self.acq and self.acq.plot_buffer:
             colors = ['b', 'g', 'r', 'c', 'm', 'y', 'k']
+            y_offset = self.yOffsetEdit.value()  # Adjustable y-offset for channel separation
             for ch_idx, buf in enumerate(self.acq.plot_buffer):
                 data = np.array(buf)
                 if data.size > 0:
                     color = colors[ch_idx % len(colors)]
                     pen = pg.mkPen(color=color, width=2)
-                    self.rawPlotWidget.plot(data, pen=pen, name=f"Ch{ch_idx+1}")
+                    offset_data = data + ch_idx * y_offset
+                    self.rawPlotWidget.plot(offset_data, pen=pen, name=f"Ch{ch_idx+1}")
             self.rawPlotWidget.setLabel('bottom', "Sample", units='s')
-            self.rawPlotWidget.setLabel('left', "Voltage", units='V')
+            self.rawPlotWidget.setLabel('left', "Voltage + offset", units='V')
+            # Optionally, add channel labels on the left as text
+            for ch_idx in range(len(self.acq.plot_buffer)):
+                label = pg.TextItem(f"Ch{ch_idx+1}", color=colors[ch_idx % len(colors)])
+                label.setPos(0, ch_idx * y_offset)
+                self.rawPlotWidget.addItem(label)
 
         # Spectrogram: only for first channel (for simplicity)
         if self.acq and self.acq.plot_buffer and self.specCheck.isChecked():
