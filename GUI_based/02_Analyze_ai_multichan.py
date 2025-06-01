@@ -171,8 +171,8 @@ class AnalysisGUI:
             channel_data = detrend(self.data[ch])
             offset = i * y_offset_val
             self.axes[0].plot(time_axis, channel_data + offset, label=f"{ch}")
-        self.axes[0].set_title(f"Raw Data (offset) - Recording ID: {rec_id}")
-        self.axes[0].set_ylabel("Amplitude + offset")
+        # self.axes[0].set_title(f"Raw Data (offset) - Recording ID: {rec_id}")
+        self.axes[0].set_ylabel("Amplitude (V)")
         self.axes[0].legend(loc="lower left")
 
         # Plot instantaneous frequency for all channels
@@ -181,9 +181,9 @@ class AnalysisGUI:
             channel_data = detrend(self.data[ch])
             instant_freq, instant_time = self.inst_freq(channel_data, sample_rate, threshold)
             self.axes[1].plot(instant_time, instant_freq, '.', label=f"{ch}")
-        self.axes[1].set_title("Instantaneous Frequency (all channels)")
-        self.axes[1].set_ylabel("Frequency (Hz)")
-        self.axes[1].set_xlabel("Time (s)")
+        # self.axes[1].set_title("Instantaneous Frequency (all channels)")
+        self.axes[1].set_ylabel("Inst. Freq. (Hz)")
+        # self.axes[1].set_xlabel("Time (s)")
         self.axes[1].set_ylim(min_freq, max_freq)
         self.axes[1].legend(loc="lower left")
 
@@ -199,9 +199,11 @@ class AnalysisGUI:
             ax.specgram(
                 channel_data, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window
             )
-            ax.set_title(f"Spectrogram: {ch}")
-            ax.set_ylabel("Frequency (Hz)")
+            # ax.set_title(f"Spectrogram: {ch}")
+            ax.set_ylabel(f"{ch} Freq. (Hz)")
             ax.set_ylim(min_freq, max_freq)
+            if i == len(channel_cols) - 1:
+                ax.set_xlabel("Time (s)")
 
         self.fig.tight_layout()
 
