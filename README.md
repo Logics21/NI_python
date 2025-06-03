@@ -17,6 +17,7 @@ To use the recording and analysis apps in this repository, you must install the 
 * pandas
 * pyarrow
 * tkinter
+
 Quick install with pip: ``pip install numpy scipy pyqt5 pyqtgraph matplotlib pandas pyarrow nidaqmx``
 
 Note: You must have [NI-DAQmx drivers installed on your system (from National Instruments)](https://www.ni.com/en/support/downloads/drivers/download.ni-daq-mx.html).
