@@ -2,9 +2,10 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame #, Checkbutton
+from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame
 import os
-from scipy.signal import detrend #, hilbert, butter, filtfilt
+from scipy.signal import detrend
+from datetime import datetime
 
 class AnalysisGUI:
 
@@ -20,16 +21,13 @@ class AnalysisGUI:
         self.max_y = DoubleVar(value=2000)
         self.nfft = IntVar(value=13)  # Default NFFT
         self.noverlap = IntVar(value=10)  # Default noverlap
+        self.y_offset = DoubleVar(value=2.0)  # Default y-offset for raw plot
         self.log_data = None
         self.data = None
 
-        # Create plot area
-        self.plot_frame = Frame(self.root)
-        self.plot_frame.pack(side="top", fill="both", expand=True)
-
         # Create control area
         self.control_frame = Frame(self.root)
-        self.control_frame.pack(side="bottom", fill="x")
+        self.control_frame.pack(side="top", fill="x")  # Move to top
 
         # Add controls
         Label(self.control_frame, text="Start (s):").pack(side="left", padx=5, pady=5)
@@ -43,14 +41,19 @@ class AnalysisGUI:
         Entry(self.control_frame, textvariable=self.max_y, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="NFFT exponent:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.nfft, width=10).pack(side="left", padx=5, pady=5)
-        Label(self.control_frame, text="NFFT exponent:").pack(side="left", padx=5, pady=5)
-        Entry(self.control_frame, textvariable=self.nfft, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="noverlap exponent:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.noverlap, width=10).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Y Offset:").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.y_offset, width=8).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Refresh Plot", command=self.refresh_plot).pack(side="left", padx=5, pady=5)
 
-        # Initialize plot
-        self.fig, self.axes = plt.subplots(3, 1, figsize=(15, 8))
+        # Create plot area
+        self.plot_frame = Frame(self.root)
+        self.plot_frame.pack(side="top", fill="both", expand=True)
+
+        # Initialize plot (will be updated for channel count)
+        self.fig = None
+        self.axes = None
         self.canvas = None
         self.toolbar = None
 
@@ -64,7 +67,7 @@ class AnalysisGUI:
     def load_data(self, log_filepath):
         with open(log_filepath, 'r') as file:
             log_data = {line.split(": ")[0]: line.split(": ")[1].strip() for line in file.readlines()}
-    
+
         base_filepath = log_filepath.split('log_')[0] + log_filepath.split('log_')[-1].split('.')[0]
         feather_filepath = base_filepath + '.feather'
         parquet_filepath = base_filepath + '.parquet'
@@ -73,11 +76,19 @@ class AnalysisGUI:
         sample_rate = int(log_data["Sample_Rate"])
         start_time = float(self.start_time_s.get())
         end_time = float(self.end_time_s.get())
-    
         start_sample = int(start_time * sample_rate)
         end_sample = None if end_time == 0 else int(end_time * sample_rate)
-        n_cols = 2  # time_ms, ch1, ch2
-    
+
+        # Determine number of channels from log or file
+        if "N_Input_Channels" in log_data:
+            n_channels = int(log_data["N_Input_Channels"])
+        elif "Input_Channels" in log_data:
+            n_channels = len(log_data["Input_Channels"].split(","))
+        else:
+            n_channels = 1  # fallback
+
+        n_cols = n_channels + 1  # time_ms + channels
+
         if os.path.exists(bin_filepath):
             if end_sample is not None:
                 n_samples = end_sample - start_sample
@@ -91,8 +102,9 @@ class AnalysisGUI:
                     f.seek(offset)
                     raw_data = np.fromfile(f, dtype='f8')
             reshaped = raw_data.reshape(-1, n_cols)
-            data = pd.DataFrame(reshaped, columns=['time_ms', 'ch1'])
-    
+            columns = ['time_ms'] + [f'ch{i+1}' for i in range(n_channels)]
+            data = pd.DataFrame(reshaped, columns=columns)
+
         elif os.path.exists(feather_filepath):
             import pyarrow.feather as feather
             import pyarrow as pa
@@ -102,7 +114,7 @@ class AnalysisGUI:
             else:
                 table = table.slice(start_sample, end_sample - start_sample)
             data = table.to_pandas()
-    
+
         elif os.path.exists(parquet_filepath):
             import pyarrow.parquet as pq
             table = pq.read_table(parquet_filepath)
@@ -111,62 +123,22 @@ class AnalysisGUI:
             else:
                 table = table.slice(start_sample, end_sample - start_sample)
             data = table.to_pandas()
-    
+
         else:
             raise FileNotFoundError("Expected data file not found.")
-    
+
         return log_data, data
 
     def inst_freq(self, y, fs, zerocross=0):
-        """
-        Computes instantaneous frequency of input signal `y` based on sampling rate `fs`
-        using the threshold value `zerocross` (usually 0 V).
-
-        Parameters:
-        - y: np.ndarray
-            The input signal.
-        - fs: float
-            The sampling rate in Hz.
-        - zerocross: float, optional
-            The threshold value for zero-crossing (default is 0).
-
-        Returns:
-        - inst_f: np.ndarray
-            Instantaneous frequency.
-        - tinst_f: np.ndarray
-            Time points for plotting instantaneous frequency.
-        """
         y1 = y[:-1]
         y2 = y[1:]
-
-        # Find zero-crossing indices
         zerocross_idx = np.where((y1 <= zerocross) & (y2 > zerocross))[0]
-
-        # Compute fractional zero-crossing positions
-        amp_step = y[zerocross_idx + 1] - y[zerocross_idx]  # Amplitude step
-        amp_frac = (zerocross - y[zerocross_idx]) / amp_step  # Fraction of step below zero
-        y_frac = zerocross_idx + amp_frac  # Adjust zero-crossing indices with fraction
-
-        # Compute instantaneous frequency
-        inst_f = 1.0 / (np.diff(y_frac) / fs)  # Instantaneous frequency
-        tinst_f = np.cumsum(np.diff(y_frac) / fs) + y_frac[0] / fs  # Time points for plotting
-
+        amp_step = y[zerocross_idx + 1] - y[zerocross_idx]
+        amp_frac = (zerocross - y[zerocross_idx]) / amp_step
+        y_frac = zerocross_idx + amp_frac
+        inst_f = 1.0 / (np.diff(y_frac) / fs)
+        tinst_f = np.cumsum(np.diff(y_frac) / fs) + y_frac[0] / fs
         return inst_f, tinst_f
-
-
-    def compute_dominant_frequency(self, data, sample_rate, min_freq, max_freq):
-        """Compute the dominant frequency of a quasi-sinusoidal signal within specified bounds."""
-        # Compute FFT and frequency bins
-        fft_result = np.fft.rfft(data)
-        frequencies = np.fft.rfftfreq(len(data), d=1/sample_rate)
-        # Apply frequency bounds
-        valid_indices = np.where((frequencies >= min_freq) & (frequencies <= max_freq))
-        filtered_frequencies = frequencies[valid_indices]
-        filtered_fft_result = np.abs(fft_result[valid_indices])
-        # Find the frequency with the maximum FFT amplitude within the bounded range
-        dominant_freq = filtered_frequencies[np.argmax(filtered_fft_result)]
-        return dominant_freq
-
 
     def refresh_plot(self):
         """Refresh the plots based on current settings."""
@@ -174,69 +146,66 @@ class AnalysisGUI:
             print("No data loaded. Please load a file first.")
             return
 
-        # Reset zoom or pan mode before refreshing the plot
-        if hasattr(self, 'toolbar') and self.toolbar is not None:
-            self.toolbar.mode = ''  # Reset active toolbar mode (zoom/pan)
-            self.toolbar.update()  # Update the toolbar to reflect the change
-
-        # Clear previous plots
-        for ax in self.axes:
-            ax.clear()
-
         # Extract key parameters
         sample_rate = int(self.log_data["Sample_Rate"])
-        # rec_dur = float(self.log_data["Recording_Duration"])
-        rec_id = self.log_data["Recording_ID"]
-
+        rec_id = self.log_data.get("Recording_ID", "")
         min_freq = self.min_y.get()
         max_freq = self.max_y.get()
 
+        # Determine number of channels
+        channel_cols = [col for col in self.data.columns if col.startswith("ch")]
+        n_channels = len(channel_cols)
         total_samples = len(self.data)
         time_axis = np.arange(total_samples) / sample_rate
 
-        # Detrend raw data
-        channel_1 = detrend(self.data["ch1"])
-        # channel_2 = detrend(self.data["ch 1"])
+        # Prepare figure and axes: 1 raw, 1 inst freq, n_channels spectrograms
+        n_rows = 2 + n_channels
+        if self.fig is not None:
+            plt.close(self.fig)
+        self.fig, self.axes = plt.subplots(n_rows, 1, figsize=(15, 3 * n_rows), squeeze=False)
+        self.axes = self.axes.flatten()
 
-        # Plot raw data
-        # max_y = max(np.max(channel_1))
-        self.axes[0].plot(time_axis, channel_1, label="Ch 1")
-        self.axes[0].set_title(f"Raw Data - Recording ID: {rec_id}")
-        self.axes[0].set_ylabel("Amplitude")
+        # Plot raw data with user-defined y-offset
+        y_offset_val = self.y_offset.get()
+        for i, ch in enumerate(channel_cols):
+            channel_data = detrend(self.data[ch])
+            offset = i * y_offset_val
+            self.axes[0].plot(time_axis, channel_data + offset, label=f"{ch}")
+        # self.axes[0].set_title(f"Raw Data (offset) - Recording ID: {rec_id}")
+        self.axes[0].set_ylabel("Amplitude (V)")
         self.axes[0].legend(loc="lower left")
 
-        # Plot instantaneous frequency
+        # Plot instantaneous frequency for all channels
         threshold = self.threshold.get()
-        # zero_crossings = np.where(np.diff(np.sign(cumulated_data)))[0]
-        instant_freq, instant_time = self.inst_freq(channel_1, sample_rate, threshold)
-        # zero_crossings = self.calculate_zero_crossings(cumulated_data, threshold)
-        # instant_freq = sample_rate / np.diff(zero_crossings)
-        # instant_time = zero_crossings[:-1] / sample_rate
-        self.axes[1].plot(instant_time, instant_freq,'.')
-        self.axes[1].set_title("Instantaneous Frequency")
-        self.axes[1].set_ylabel("Frequency (Hz)")
-        self.axes[1].set_xlabel("Time (s)")
+        for i, ch in enumerate(channel_cols):
+            channel_data = detrend(self.data[ch])
+            instant_freq, instant_time = self.inst_freq(channel_data, sample_rate, threshold)
+            self.axes[1].plot(instant_time, instant_freq, '.', label=f"{ch}")
+        # self.axes[1].set_title("Instantaneous Frequency (all channels)")
+        self.axes[1].set_ylabel("Inst. Freq. (Hz)")
+        # self.axes[1].set_xlabel("Time (s)")
         self.axes[1].set_ylim(min_freq, max_freq)
+        self.axes[1].legend(loc="lower left")
 
-        # Plot spectrogram
+        # Plot spectrogram for each channel
         nfft_exp = self.nfft.get()
-        nfft_value = 2**nfft_exp
+        nfft_value = 2 ** nfft_exp
         noverlap_exp = self.noverlap.get()
-        noverlap_value = 2**noverlap_exp
-        # Create a Hanning window
+        noverlap_value = 2 ** noverlap_exp
         hanning_window = np.hanning(nfft_value)
+        for i, ch in enumerate(channel_cols):
+            channel_data = detrend(self.data[ch])
+            ax = self.axes[2 + i]
+            ax.specgram(
+                channel_data, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window
+            )
+            # ax.set_title(f"Spectrogram: {ch}")
+            ax.set_ylabel(f"{ch} Freq. (Hz)")
+            ax.set_ylim(min_freq, max_freq)
+            if i == len(channel_cols) - 1:
+                ax.set_xlabel("Time (s)")
 
-        self.axes[2].specgram(
-            channel_1, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window
-        )
-        self.axes[2].set_title("Spectrogram")
-        self.axes[2].set_ylabel("Frequency (Hz)")
-        self.axes[2].set_ylim(min_freq, max_freq)
-
-
-        # Adjust layout
         self.fig.tight_layout()
-
 
         # Update canvas and toolbar
         if self.canvas is not None:
@@ -244,17 +213,28 @@ class AnalysisGUI:
         if hasattr(self, 'toolbar') and self.toolbar is not None:
             self.toolbar.destroy()
 
-        # Create a new canvas using FigureCanvasTkAgg
         self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_frame)
         self.canvas.draw()
-        self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
-
-        # Add the navigation toolbar
+        # Place toolbar at the top
         self.toolbar = NavigationToolbar2Tk(self.canvas, self.plot_frame)
         self.toolbar.update()
-        self.toolbar.pack(side="bottom", fill="x")
+        self.toolbar.pack(side="top", fill="x")
+        self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
 
 if __name__ == "__main__":
     root = Tk()
+    # Set window size to fit screen (with some margin)
+    screen_width = root.winfo_screenwidth()
+    screen_height = root.winfo_screenheight()
+    window_width = int(screen_width * 0.95)
+    window_height = int(screen_height * 0.85)
+    root.geometry(f"{window_width}x{window_height}")
     app = AnalysisGUI(root)
+
+    def on_closing():
+        import matplotlib.pyplot as plt
+        plt.close('all')
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_closing)
     root.mainloop()
