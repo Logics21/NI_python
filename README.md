@@ -2,7 +2,7 @@
 Python code for data acquisition using National Instruments DAQs and the nidaqmx API
 
 # GUI-based programs
-Apps that let you visualize and record analog input from National Instruments devices. They are based on [PyQT5](https://pypi.org/project/PyQt5/] and [PyQtGraph](https://www.pyqtgraph.org/). 
+Apps that let you visualize and record analog input from National Instruments devices. They are based on [PyQT5](https://pypi.org/project/PyQt5/) and [PyQtGraph](https://www.pyqtgraph.org/). 
 
 # Requirements & Recommendations for This Repository
 ## Required Python Libraries
