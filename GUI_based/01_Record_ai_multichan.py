@@ -537,15 +537,6 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                 if getattr(self.acq, "ai_task", None) is not None:
                     if self.acq.running:
                         self.acq.stop()
-                    else:
-                        try:
-                            self.acq.ai_task.stop()
-                        except Exception:
-                            pass
-                        try:
-                            self.acq.ai_task.close()
-                        except Exception:
-                            pass
             except Exception as e:
                 print(f"Error during safe close (DAQ): {e}")
         # Stop file writer thread if running
