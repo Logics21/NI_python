@@ -288,6 +288,14 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.testLedBtn.setCheckable(True)
         self.testLedBtn.setStyleSheet("color: orange; font-weight: bold;")
         daq_layout.addRow(self.testLedBtn)
+        # Add random blink controls
+        self.randomBlinkCheck = QtWidgets.QCheckBox("Enable Random LED Blinking")
+        self.randomBlinkCheck.setToolTip("If checked, the LED will blink randomly during recording.")
+        self.randomBlinkSpin = QtWidgets.QSpinBox()
+        self.randomBlinkSpin.setRange(1, 1000)
+        self.randomBlinkSpin.setValue(10)
+        daq_layout.addRow(self.randomBlinkCheck)
+        daq_layout.addRow("Number of Blinks:", self.randomBlinkSpin)
         self.daqGroup.setLayout(daq_layout)
         controls_layout.addWidget(self.daqGroup)
 
@@ -387,6 +395,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.resetBtn.clicked.connect(self.reset_device)
         self.closeBtn.clicked.connect(self.safe_close)
         self.testLedBtn.clicked.connect(self.toggle_test_led)
+        self.randomBlinkCheck.stateChanged.connect(self.toggle_random_blink_ui)
+        self.randomBlinkSpin.setEnabled(self.randomBlinkCheck.isChecked())
 
     def toggle_split_duration(self):
         self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
@@ -528,11 +538,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                     self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
                     self.specPlotWidget.setLabel('bottom', "Time", units='s')
                     self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
-            else:
-                self.specPlotWidget.clear()
-        else:
-            self.specPlotWidget.clear()
-
+            # Removed the redundant clearing of the spectrogram plot
         # File splitting logic
         if getattr(self, 'split_enabled', False) and self.acq and self.acq.acquired_samples > 0:
             if self.next_split_idx < len(self.split_points):
@@ -549,6 +555,44 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                     self.acq.logfile_written = False
                     self.acq.recording_start_timestamp = None
                     self.next_split_idx += 1
+                    # Generate new blink sequence for this split
+                    self._generate_random_blink_sequence(self.split_duration)
+                    self._random_blink_start_time = time.time()
+                    self._schedule_next_blink()
+
+    def toggle_random_blink_ui(self):
+        self.randomBlinkSpin.setEnabled(self.randomBlinkCheck.isChecked())
+
+    def _generate_random_blink_sequence(self, duration):
+        if not (self.randomBlinkCheck.isChecked() and self.acq and self.acq.do_task):
+            self._random_blink_events = []
+            return
+        n_blinks = self.randomBlinkSpin.value()
+        blink_duration = 0.1  # seconds
+        import random
+        seed = int(time.time() * 1000) % (2**32 - 1)
+        random.seed(seed)
+        blink_times = sorted(random.uniform(0, duration - blink_duration) for _ in range(n_blinks))
+        self._random_blink_events = [(t, True) for t in blink_times] + [(t + blink_duration, False) for t in blink_times]
+        self._random_blink_events.sort()
+        self._random_blink_idx = 0
+
+    def _schedule_next_blink(self):
+        if not (self.randomBlinkCheck.isChecked() and self.acq and self.acq.do_task):
+            return
+        if not hasattr(self, '_random_blink_events') or self._random_blink_events is None or self._random_blink_idx >= len(self._random_blink_events):
+            return
+        event_time, state = self._random_blink_events[self._random_blink_idx]
+        now = time.time()
+        elapsed = now - self._random_blink_start_time
+        delay = max(0, event_time - elapsed)
+        QtCore.QTimer.singleShot(int(delay * 1000), lambda: self._do_random_blink(state))
+
+    def _do_random_blink(self, state):
+        if self.acq and self.acq.do_task:
+            self.acq.set_led(state)
+        self._random_blink_idx += 1
+        self._schedule_next_blink()
 
     def start_record(self):
         self.recordBtn.setEnabled(False)
@@ -568,6 +612,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.acq.logfile_callback = self.save_log_file
 
         self.split_enabled = self.splitFileCheck.isChecked()
+        self._random_blink_start_time = None
+        self._random_blink_events = None
+        self._random_blink_idx = 0
         if self.split_enabled:
             try:
                 self.split_duration = float(self.splitDurEdit.text())
@@ -589,11 +636,19 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             total_samples = self.acq.samples_to_save
             self.split_points = [self.split_samples * i for i in range(1, int(np.ceil(total_samples / self.split_samples)))]
             self.next_split_idx = 0
+            # Generate blink sequence for first split
+            self._generate_random_blink_sequence(self.split_duration)
+            self._random_blink_start_time = time.time()
+            self._schedule_next_blink()
         else:
             self.record_filepath = filepath
             with open(self.record_filepath, 'wb'):
                 pass
             self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
+            # Generate blink sequence for full duration
+            self._generate_random_blink_sequence(rec_duration)
+            self._random_blink_start_time = time.time()
+            self._schedule_next_blink()
         self.file_writer.start()
 
     def _split_filename(self):
@@ -608,6 +663,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         if self.acq and self.acq.di_channel:
             led_log_path = os.path.splitext(self.record_filepath)[0] + '_led_events.csv'
             self.acq.save_led_event_log(led_log_path)
+        # Clean up random blink state
+        if hasattr(self, '_random_blink_events'):
+            del self._random_blink_events
         self.recordBtn.setEnabled(True)
         QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
 
