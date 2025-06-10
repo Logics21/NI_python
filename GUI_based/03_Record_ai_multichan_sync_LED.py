@@ -663,6 +663,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         if self.acq and self.acq.di_channel:
             led_log_path = os.path.splitext(self.record_filepath)[0] + '_led_events.csv'
             self.acq.save_led_event_log(led_log_path)
+            self.acq.led_event_log = []  # reset LED event list after saving
         # Clean up random blink state
         if hasattr(self, '_random_blink_events'):
             del self._random_blink_events
