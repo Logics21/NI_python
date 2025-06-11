@@ -34,13 +34,13 @@ Make sure your DAQ device is connected and recognized by NI MAX.
 If you encounter issues with NI-DAQmx, refer to [NI's official documentation](https://nidaqmx-python.readthedocs.io/en/stable/).
 
 # 01_Record_ai_multichan.py
-Acquire analog input on a various number of channels. Saves data in a .bin file and metadata in a .txt logfile.
+Acquire analog input on a various number of channels.
 Execute in your fav IDE or simply use your command line/Anaconda prompt like so:
 ```python "Path\to\gui_program.py"```
-![Data Acquisition](https://github.com/muchaste/NI_python/releases/download/v0.1-alpha/data_acquisition.gif)
+Record files with optional file splitting (e.g., for large files) in a .bin file and metadata in a .txt logfile.
 
-Record files with optional file splitting (e.g., for large files).
-![Record Data](https://github.com/muchaste/NI_python/releases/download/v0.1-alpha/recording.gif)
+![Data Acquisition](https://github.com/muchaste/NI_python/releases/download/v0.1-alpha/data_acquisition_smaller.gif)
+
 
 # 02_Analyze_ai_multichan.py
 Tkinter app for visualization of recordings. Reads in metadata from the logfile.
