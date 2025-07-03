@@ -682,7 +682,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             "N_Input_Channels": self.acq.num_channels,
             "Sample_Rate": self.acq.sample_rate,
             "Recording_ID": self.recIdEdit.text(),
-            "Recording_Duration": self.recDurEdit.text(),
+            "Total_Recording_Duration": self.recDurEdit.text(),
+            "Split_Recording_Duration": self.splitDurEdit.text() if self.splitFileCheck.isChecked() else "N/A",
             "Input_Channels": ', '.join(self.acq.input_channels),
             "Recording_Start_Timestamp": timestamp_str
         }
