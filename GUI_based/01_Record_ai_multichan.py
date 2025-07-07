@@ -1,10 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Dynamic one-channel recording program with spectrogram option (PyQt5/pyqtgraph version)
-Created on Thu Mar  6 13:43:40 2025
+Dynamic analog input recording program with spectrogram option for NI DAQ devices
 
-Authors: ShuttleBox / Stefan Mucha (ported by ChatGPT)
+Authors: Stefan Mucha/chatGPT
 """
 
 import sys
