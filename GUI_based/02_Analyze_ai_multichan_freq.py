@@ -192,17 +192,6 @@ class AnalysisGUI:
         inst_f = 1.0 / crossing_intervals
         tinst_f = np.cumsum(crossing_intervals) + (y_frac[0] / fs)
         return inst_f, tinst_f
-    
-    # def inst_freq(self, y, fs, zerocross=0):
-    #     y1 = y[:-1]
-    #     y2 = y[1:]
-    #     zerocross_idx = np.where((y1 <= zerocross) & (y2 > zerocross))[0]
-    #     amp_step = y[zerocross_idx + 1] - y[zerocross_idx]
-    #     amp_frac = (zerocross - y[zerocross_idx]) / amp_step
-    #     y_frac = zerocross_idx + amp_frac
-    #     inst_f = 1.0 / (np.diff(y_frac) / fs)
-    #     tinst_f = np.cumsum(np.diff(y_frac) / fs) + y_frac[0] / fs
-    #     return inst_f, tinst_f
 
     def refresh_plot(self):
         """Refresh the plots based on current settings."""
