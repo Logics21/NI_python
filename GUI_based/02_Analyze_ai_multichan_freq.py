@@ -1,8 +1,17 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Analysis tool for multi-channel analog input data with GUI. Focuses on instantaneous frequency and spectrogram analysis.
+
+Authors: Stefan Mucha/chatGPT
+"""
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame
+from tkinter import Tk, filedialog, Button, IntVar, DoubleVar, Entry, Label, Frame, Checkbutton
+from scipy.signal import butter, filtfilt
 import os
 from scipy.signal import detrend
 from datetime import datetime
@@ -17,6 +26,9 @@ class AnalysisGUI:
         self.start_time_s = DoubleVar(value=0.0)
         self.end_time_s = DoubleVar(value=60.0)
         self.threshold = DoubleVar(value=0.00)
+        self.bandpass_filter_flag = IntVar(value=1)
+        self.l_cutoff = DoubleVar(value=200.0)  # Default low cutoff for bandpass filter
+        self.h_cutoff = DoubleVar(value=2000.0)  # Default high cutoff for bandpass filter
         self.min_y = DoubleVar(value=200)
         self.max_y = DoubleVar(value=2000)
         self.nfft = IntVar(value=13)  # Default NFFT
@@ -35,6 +47,13 @@ class AnalysisGUI:
         Label(self.control_frame, text="End (s, 0=EOF):").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.end_time_s, width=8).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Load File", command=self.load_file).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Threshold:").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.threshold, width=10).pack(side="left", padx=5, pady=5)
+        Checkbutton(self.control_frame, text="Bandpass Filt. (inst. f.)", variable=self.bandpass_filter_flag).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Bandpass low cutoff (Hz):").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.l_cutoff, width=10).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Bandpass high cutoff (Hz):").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.h_cutoff, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec min freq:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.min_y, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec max freq:").pack(side="left", padx=5, pady=5)
@@ -129,15 +148,49 @@ class AnalysisGUI:
 
         return log_data, data
 
-    def inst_freq(self, y, fs, zerocross=0):
+    def bandpass_filter(self, data, fs, lowcut, highcut, order=4):
+        """
+        Returns a bandpass-filtered version of data, with passband = [lowcut, highcut].
+        """
+        nyquist = 0.5 * fs
+        low = lowcut / nyquist
+        high = highcut / nyquist
+        b, a = butter(order, [low, high], btype='band')
+        filtered_data = filtfilt(b, a, data)
+        return filtered_data
+
+    def inst_freq(self, y, fs,
+                     zero_threshold=0.0,
+                     min_interval=0.0):
+        """
+        A robust instantaneous frequency function that:
+          1) Optionally filters the data around expected fundamental freq (bandpass).
+          2) Detects zero crossings above 'zero_threshold' amplitude step.
+          3) Skips suspicious intervals below 'min_interval'.
+        """
+
+        # 2) Standard zero crossing detection
         y1 = y[:-1]
         y2 = y[1:]
-        zerocross_idx = np.where((y1 <= zerocross) & (y2 > zerocross))[0]
+        zerocross_idx = np.where((y1 <= 0) & (y2 > 0))[0]
+
+        # Filter out suspicious amplitude steps
         amp_step = y[zerocross_idx + 1] - y[zerocross_idx]
-        amp_frac = (zerocross - y[zerocross_idx]) / amp_step
+        keep = np.abs(amp_step) > zero_threshold  # e.g., zero_threshold=0.001
+        zerocross_idx = zerocross_idx[keep]
+        amp_step = amp_step[keep]
+
+        amp_frac = (0 - y[zerocross_idx]) / amp_step
         y_frac = zerocross_idx + amp_frac
-        inst_f = 1.0 / (np.diff(y_frac) / fs)
-        tinst_f = np.cumsum(np.diff(y_frac) / fs) + y_frac[0] / fs
+
+        # 3) Convert crossing intervals to frequency, optionally skip too-small intervals
+        crossing_intervals = np.diff(y_frac) / fs  # in seconds
+        if min_interval > 0:
+            # e.g., skip intervals that are less than half of your expected fundamental period
+            crossing_intervals = crossing_intervals[crossing_intervals >= min_interval]
+
+        inst_f = 1.0 / crossing_intervals
+        tinst_f = np.cumsum(crossing_intervals) + (y_frac[0] / fs)
         return inst_f, tinst_f
 
     def refresh_plot(self):
@@ -148,7 +201,7 @@ class AnalysisGUI:
 
         # Extract key parameters
         sample_rate = int(self.log_data["Sample_Rate"])
-        rec_id = self.log_data.get("Recording_ID", "")
+        # rec_id = self.log_data.get("Recording_ID", "")
         min_freq = self.min_y.get()
         max_freq = self.max_y.get()
 
@@ -158,8 +211,8 @@ class AnalysisGUI:
         total_samples = len(self.data)
         time_axis = np.arange(total_samples) / sample_rate
 
-        # Prepare figure and axes: 1 raw, 1 inst freq, n_channels spectrograms
-        n_rows = 2 + n_channels
+        # Prepare figure and axes: 1 raw, 1 inst freq, n_channels spectrograms, n_channels PSDs
+        n_rows = 2 + 2 * n_channels  # raw + inst_freq + spectrograms + PSDs
         if self.fig is not None:
             plt.close(self.fig)
         self.fig, self.axes = plt.subplots(n_rows, 1, figsize=(15, 3 * n_rows), squeeze=False)
@@ -175,35 +228,85 @@ class AnalysisGUI:
         self.axes[0].set_ylabel("Amplitude (V)")
         self.axes[0].legend(loc="lower left")
 
-        # Plot instantaneous frequency for all channels
+        # Plot instantaneous frequency for all channels and annotate median
         threshold = self.threshold.get()
+        median_freqs = []
         for i, ch in enumerate(channel_cols):
             channel_data = detrend(self.data[ch])
+            if self.bandpass_filter_flag.get():
+                lowcut = self.l_cutoff.get()
+                highcut = self.h_cutoff.get()
+                channel_data = self.bandpass_filter(channel_data, sample_rate, lowcut, highcut)
             instant_freq, instant_time = self.inst_freq(channel_data, sample_rate, threshold)
             self.axes[1].plot(instant_time, instant_freq, '.', label=f"{ch}")
-        # self.axes[1].set_title("Instantaneous Frequency (all channels)")
+            if len(instant_freq) > 0:
+                median_val = np.median(instant_freq)
+                median_freqs.append((ch, median_val))
+                # Annotate median on the plot near the right edge
+                self.axes[1].annotate(f"Median: {median_val:.2f} Hz", 
+                    xy=(instant_time[-1], median_val),
+                    xytext=(instant_time[-1], median_val),
+                    textcoords='data',
+                    fontsize=9, color=self.axes[1].lines[-1].get_color(),
+                    va='center', ha='right',
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.5))
         self.axes[1].set_ylabel("Inst. Freq. (Hz)")
-        # self.axes[1].set_xlabel("Time (s)")
         self.axes[1].set_ylim(min_freq, max_freq)
         self.axes[1].legend(loc="lower left")
 
         # Plot spectrogram for each channel
         nfft_exp = self.nfft.get()
-        nfft_value = 2 ** nfft_exp
+        nfft_value_spec = 2 ** nfft_exp
+        nfft_value_psd = 2 ** (nfft_exp + 3)  # For PSD, use a larger NFFT
+        hanning_window_psd = np.hanning(nfft_value_psd)
         noverlap_exp = self.noverlap.get()
         noverlap_value = 2 ** noverlap_exp
-        hanning_window = np.hanning(nfft_value)
+        hanning_window_spec = np.hanning(nfft_value_spec)
         for i, ch in enumerate(channel_cols):
             channel_data = detrend(self.data[ch])
             ax = self.axes[2 + i]
             ax.specgram(
-                channel_data, Fs=sample_rate, NFFT=nfft_value, noverlap=noverlap_value, window=hanning_window
+                channel_data, Fs=sample_rate, NFFT=nfft_value_spec, noverlap=noverlap_value, window=hanning_window_spec
             )
-            # ax.set_title(f"Spectrogram: {ch}")
             ax.set_ylabel(f"{ch} Freq. (Hz)")
             ax.set_ylim(min_freq, max_freq)
-            if i == len(channel_cols) - 1:
-                ax.set_xlabel("Time (s)")
+            # Don't set xlabel for spectrograms anymore since PSDs will be below
+
+        # Plot PSD for each channel
+        for i, ch in enumerate(channel_cols):
+            channel_data = detrend(self.data[ch])
+            ax = self.axes[2 + n_channels + i]
+            
+            # Calculate PSD using the same parameters as spectrogram
+            from scipy.signal import welch
+            freqs, psd = welch(channel_data, fs=sample_rate, window=hanning_window_psd, 
+                              nperseg=nfft_value_psd, noverlap=noverlap_value)
+            
+            # Find peak in the frequency range of interest
+            freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
+            if np.any(freq_mask):
+                freqs_roi = freqs[freq_mask]
+                psd_roi = psd[freq_mask]
+                peak_idx = np.argmax(psd_roi)
+                peak_freq = freqs_roi[peak_idx]
+                peak_power = psd_roi[peak_idx]
+                
+                # Plot PSD
+                ax.plot(freqs, 10 * np.log10(psd))
+                ax.axvline(peak_freq, color='red', linestyle='--', alpha=0.7)
+                ax.annotate(f'Peak: {peak_freq:.1f} Hz\n{10*np.log10(peak_power):.1f} dB', 
+                           xy=(peak_freq, 10*np.log10(peak_power)), 
+                           xytext=(peak_freq + (max_freq - min_freq) * 0.1, 10*np.log10(peak_power)),
+                           arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
+                           fontsize=8, color='red')
+                
+                ax.set_xlim(min_freq, max_freq)
+                ax.set_ylabel(f"{ch} PSD (dB/Hz)")
+                ax.grid(True, alpha=0.3)
+                
+                # Set xlabel only for the last PSD plot
+                if i == len(channel_cols) - 1:
+                    ax.set_xlabel("Frequency (Hz)")
 
         self.fig.tight_layout()
 

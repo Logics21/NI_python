@@ -1,9 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-Dynamic analog input recording program with spectrogram option for NI DAQ devices
+Dynamic one-channel recording program with spectrogram option (PyQt5/pyqtgraph version)
+Created on Thu Mar  6 13:43:40 2025
 
-Authors: Stefan Mucha/chatGPT
+Authors: ShuttleBox / Stefan Mucha (ported by ChatGPT)
 """
 
 import sys
@@ -31,7 +32,8 @@ if not daqList:
 
 # ---------------- Data Acquisition Module ----------------
 class DataAcquisition:
-    def __init__(self, input_channels, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration):
+    def __init__(self, input_channels, sample_rate, min_voltage, max_voltage, refresh_rate, plot_duration,
+                 do_channel=None, di_channel=None):
         # input_channels: list of strings
         self.input_channels = input_channels
         self.sample_rate = sample_rate
@@ -52,7 +54,11 @@ class DataAcquisition:
         # One buffer per channel
         self.plot_buffer = [collections.deque(maxlen=int(plot_duration * self.sample_rate)) for _ in range(self.num_channels)]
         self.storage_buffer = [collections.deque() for _ in range(self.num_channels)]
+        # Buffer for DI samples and event log
+        self.di_buffer = collections.deque() if di_channel else None
+        self.led_event_log = []  # List of (timestamp, state)
 
+        # --- Analog Input Task ---
         self.ai_task = nidaqmx.Task()
         for ch in input_channels:
             self.ai_task.ai_channels.add_ai_voltage_chan(
@@ -62,6 +68,29 @@ class DataAcquisition:
         self.ai_task.register_every_n_samples_acquired_into_buffer_event(self.sample_interval, self.callback)
         self.running = False
 
+        # --- Digital Output Task (for LED) ---
+        self.do_channel = do_channel
+        if do_channel:
+            self.do_task = nidaqmx.Task()
+            self.do_task.do_channels.add_do_chan(do_channel)
+            self.do_task.start()
+        else:
+            self.do_task = None
+
+        # --- Digital Input Task (for LED sync detection) ---
+        self.di_channel = di_channel
+        if di_channel:
+            self.di_task = nidaqmx.Task()
+            self.di_task.di_channels.add_di_chan(di_channel)
+            # Synchronize DI sampling with AI sampling clock
+            self.di_task.timing.cfg_samp_clk_timing(
+                self.sample_rate,
+                source=f"/{di_channel.split('/')[0]}/ai/SampleClock",
+                sample_mode=constants.AcquisitionType.CONTINUOUS
+            )
+        else:
+            self.di_task = None
+
         self.recording_active = False
         self.acquired_samples = 0
         self.samples_to_save = 0
@@ -70,11 +99,18 @@ class DataAcquisition:
         self.logfile_written = False
         self.logfile_callback = None
 
+    def set_led(self, state: bool):
+        """Set the LED digital output (True=on, False=off)"""
+        if self.do_task:
+            self.do_task.write(state)
+
     def start(self):
         self.running = True
         self.recording_start_timestamp = None
         self.logfile_written = False
         self.ai_task.start()
+        if self.di_task:
+            self.di_task.start()
 
     def stop(self):
         self.running = False
@@ -87,23 +123,62 @@ class DataAcquisition:
             self.ai_task.stop()
             self.ai_task.close()
         except Exception as e:
-            print("Error stopping DAQ task:", e)
+            print("Error stopping AI DAQ task:", e)
+        if self.do_task:
+            try:
+                self.do_task.stop()
+                self.do_task.close()
+            except Exception as e:
+                print("Error stopping DO DAQ task:", e)
+        if self.di_task:
+            try:
+                self.di_task.stop()
+                self.di_task.close()
+            except Exception as e:
+                print("Error stopping DI DAQ task:", e)
 
     def callback(self, task_handle, event_type, number_of_samples, callback_data):
         if not self.running:
             return 0
         temp_data = self.ai_task.read(number_of_samples_per_channel=nidaqmx.constants.READ_ALL_AVAILABLE)
-
         # temp_data shape: (num_channels, n_samples)
         if self.num_channels == 1:
             temp_data = np.array([temp_data])  # shape (1, n_samples)
         else:
             temp_data = np.array(temp_data)
-        # print(f"num_channels={self.num_channels}, len(plot_buffer)={len(self.plot_buffer)}, len(storage_buffer)={len(self.storage_buffer)}, temp_data.shape={temp_data.shape}")
-
         # Extend buffers per channel
         for ch_idx in range(self.num_channels):
             self.plot_buffer[ch_idx].extend(temp_data[ch_idx])
+        # --- DI acquisition and event detection ---
+        if self.di_task and self.di_buffer is not None:
+            try:
+                di_samples = self.di_task.read(number_of_samples_per_channel=temp_data.shape[1], timeout=0)
+                # di_samples: shape (n_samples,) or (1, n_samples)
+                if isinstance(di_samples, list) or isinstance(di_samples, np.ndarray):
+                    if isinstance(di_samples, list):
+                        di_samples = np.array(di_samples)
+                    if di_samples.ndim > 1:
+                        di_samples = di_samples[0]
+                    self.di_buffer.extend(di_samples)
+                    # Edge detection (rising/falling)
+                    arr = np.array(self.di_buffer)
+                    if arr.size > 1:
+                        # Only check new samples
+                        prev = arr[:-1]
+                        curr = arr[1:]
+                        edges = np.where(prev != curr)[0]
+                        for idx in edges:
+                            # Timestamp relative to AI sample clock
+                            sample_idx = self.acquired_samples + idx - (arr.size - len(di_samples))
+                            timestamp = (self.recording_start_timestamp or time.time()) + sample_idx / self.sample_rate
+                            state = int(curr[idx])
+                            self.led_event_log.append((timestamp, state))
+                    # Keep buffer short
+                    if len(self.di_buffer) > 1000:
+                        for _ in range(len(self.di_buffer) - 1000):
+                            self.di_buffer.popleft()
+            except Exception:
+                pass
         if self.recording_active:
             n_samples = temp_data.shape[1]
             if self.recording_start_timestamp is None:
@@ -119,16 +194,23 @@ class DataAcquisition:
                 recording_complete = True
             else:
                 recording_complete = False
-
             for ch_idx in range(self.num_channels):
                 self.storage_buffer[ch_idx].extend(temp_data[ch_idx])
             self.acquired_samples += n_samples
-
             if recording_complete:
                 self.recording_active = False
                 if self.recording_complete_callback is not None:
                     self.recording_complete_callback()
         return 0
+
+    def save_led_event_log(self, filepath):
+        """Save LED on/off event log to a CSV file."""
+        if not self.led_event_log:
+            return
+        with open(filepath, 'w') as f:
+            f.write('timestamp,state\n')
+            for ts, state in self.led_event_log:
+                f.write(f'{ts:.6f},{state}\n')
 
 # ---------------- File Writing Module ----------------
 class FileWriter(threading.Thread):
@@ -195,8 +277,31 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         daq_layout.addRow("Input Channel:", self.chanEdit)
         self.sampleRateEdit = QtWidgets.QLineEdit("20000")
         daq_layout.addRow("Sample Rate (Hz):", self.sampleRateEdit)
+
+        # --- Add DO/DI channel dropdowns ---
+        self.doCombo = QtWidgets.QComboBox()
+        self.diCombo = QtWidgets.QComboBox()
+        daq_layout.addRow("Digital Output (DO) Channel:", self.doCombo)
+        daq_layout.addRow("Digital Input (DI) Channel:", self.diCombo)
+        # Add Test LED button
+        self.testLedBtn = QtWidgets.QPushButton("Test LED")
+        self.testLedBtn.setCheckable(True)
+        self.testLedBtn.setStyleSheet("color: orange; font-weight: bold;")
+        daq_layout.addRow(self.testLedBtn)
+        # Add random blink controls
+        self.randomBlinkCheck = QtWidgets.QCheckBox("Enable Random LED Blinking")
+        self.randomBlinkCheck.setToolTip("If checked, the LED will blink randomly during recording.")
+        self.randomBlinkSpin = QtWidgets.QSpinBox()
+        self.randomBlinkSpin.setRange(1, 1000)
+        self.randomBlinkSpin.setValue(10)
+        daq_layout.addRow(self.randomBlinkCheck)
+        daq_layout.addRow("Number of Blinks:", self.randomBlinkSpin)
         self.daqGroup.setLayout(daq_layout)
         controls_layout.addWidget(self.daqGroup)
+
+        # Populate digital channels for the initially selected device
+        self.update_digital_channel_combos(self.daqCombo.currentText())
+        self.daqCombo.currentTextChanged.connect(self.update_digital_channel_combos)
 
         # Plot Settings
         self.plotGroup = QtWidgets.QGroupBox("Plot Settings")
@@ -289,15 +394,40 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.recordBtn.clicked.connect(self.start_record)
         self.resetBtn.clicked.connect(self.reset_device)
         self.closeBtn.clicked.connect(self.safe_close)
+        self.testLedBtn.clicked.connect(self.toggle_test_led)
+        self.randomBlinkCheck.stateChanged.connect(self.toggle_random_blink_ui)
+        self.randomBlinkSpin.setEnabled(self.randomBlinkCheck.isChecked())
 
     def toggle_split_duration(self):
         self.splitDurEdit.setEnabled(self.splitFileCheck.isChecked())
+
+    def update_digital_channel_combos(self, device_name):
+        """Populate DO/DI dropdowns with available digital lines for the selected device."""
+        import nidaqmx
+        try:
+            device = nidaqmx.system.Device(device_name)
+            do_lines = [line.name.split("/", 1)[1] for line in device.do_lines]
+            di_lines = [line.name.split("/", 1)[1] for line in device.di_lines]
+        except Exception:
+            do_lines = []
+            di_lines = []
+        self.doCombo.clear()
+        self.diCombo.clear()
+        self.doCombo.addItem("")  # Allow blank selection
+        self.diCombo.addItem("")
+        self.doCombo.addItems(do_lines)
+        self.diCombo.addItems(di_lines)
 
     def start_acquisition(self):
         device = self.daqCombo.currentText()
         # Accept comma or whitespace separated channels, strip whitespace
         channel_text = self.chanEdit.text().strip()
         channel_list = [f"{device}/{ch.strip()}" for ch in channel_text.replace(',', ' ').split()]
+        # --- Get selected DO/DI channels ---
+        do_channel = self.doCombo.currentText().strip()
+        di_channel = self.diCombo.currentText().strip()
+        do_channel_full = f"{device}/{do_channel}" if do_channel else None
+        di_channel_full = f"{device}/{di_channel}" if di_channel else None
         try:
             sample_rate = int(self.sampleRateEdit.text())
             min_freq = float(self.specMinEdit.text())
@@ -329,8 +459,11 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specMinEdit.setEnabled(False)
         self.specMaxEdit.setEnabled(False)
         self.specWindowEdit.setEnabled(False)
+        self.doCombo.setEnabled(False)
+        self.diCombo.setEnabled(False)
 
-        self.acq = DataAcquisition(channel_list, sample_rate, -10, 10, refresh_rate, plot_duration)
+        self.acq = DataAcquisition(channel_list, sample_rate, -10, 10, refresh_rate, plot_duration,
+                                   do_channel=do_channel_full, di_channel=di_channel_full)
         for buf in self.acq.plot_buffer:
             buf.clear()
         for buf in self.acq.storage_buffer:
@@ -405,11 +538,7 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                     self.specPlotWidget.setLimits(xMin=0, xMax=t[-1], yMin=self.min_freq, yMax=f[-1])
                     self.specPlotWidget.setLabel('bottom', "Time", units='s')
                     self.specPlotWidget.setLabel('left', "Frequency", units='Hz')
-            else:
-                self.specPlotWidget.clear()
-        else:
-            self.specPlotWidget.clear()
-
+            # Removed the redundant clearing of the spectrogram plot
         # File splitting logic
         if getattr(self, 'split_enabled', False) and self.acq and self.acq.acquired_samples > 0:
             if self.next_split_idx < len(self.split_points):
@@ -426,6 +555,44 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
                     self.acq.logfile_written = False
                     self.acq.recording_start_timestamp = None
                     self.next_split_idx += 1
+                    # Generate new blink sequence for this split
+                    self._generate_random_blink_sequence(self.split_duration)
+                    self._random_blink_start_time = time.time()
+                    self._schedule_next_blink()
+
+    def toggle_random_blink_ui(self):
+        self.randomBlinkSpin.setEnabled(self.randomBlinkCheck.isChecked())
+
+    def _generate_random_blink_sequence(self, duration):
+        if not (self.randomBlinkCheck.isChecked() and self.acq and self.acq.do_task):
+            self._random_blink_events = []
+            return
+        n_blinks = self.randomBlinkSpin.value()
+        blink_duration = 0.1  # seconds
+        import random
+        seed = int(time.time() * 1000) % (2**32 - 1)
+        random.seed(seed)
+        blink_times = sorted(random.uniform(0, duration - blink_duration) for _ in range(n_blinks))
+        self._random_blink_events = [(t, True) for t in blink_times] + [(t + blink_duration, False) for t in blink_times]
+        self._random_blink_events.sort()
+        self._random_blink_idx = 0
+
+    def _schedule_next_blink(self):
+        if not (self.randomBlinkCheck.isChecked() and self.acq and self.acq.do_task):
+            return
+        if not hasattr(self, '_random_blink_events') or self._random_blink_events is None or self._random_blink_idx >= len(self._random_blink_events):
+            return
+        event_time, state = self._random_blink_events[self._random_blink_idx]
+        now = time.time()
+        elapsed = now - self._random_blink_start_time
+        delay = max(0, event_time - elapsed)
+        QtCore.QTimer.singleShot(int(delay * 1000), lambda: self._do_random_blink(state))
+
+    def _do_random_blink(self, state):
+        if self.acq and self.acq.do_task:
+            self.acq.set_led(state)
+        self._random_blink_idx += 1
+        self._schedule_next_blink()
 
     def start_record(self):
         self.recordBtn.setEnabled(False)
@@ -445,6 +612,9 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.acq.logfile_callback = self.save_log_file
 
         self.split_enabled = self.splitFileCheck.isChecked()
+        self._random_blink_start_time = None
+        self._random_blink_events = None
+        self._random_blink_idx = 0
         if self.split_enabled:
             try:
                 self.split_duration = float(self.splitDurEdit.text())
@@ -466,11 +636,19 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             total_samples = self.acq.samples_to_save
             self.split_points = [self.split_samples * i for i in range(1, int(np.ceil(total_samples / self.split_samples)))]
             self.next_split_idx = 0
+            # Generate blink sequence for first split
+            self._generate_random_blink_sequence(self.split_duration)
+            self._random_blink_start_time = time.time()
+            self._schedule_next_blink()
         else:
             self.record_filepath = filepath
             with open(self.record_filepath, 'wb'):
                 pass
             self.file_writer = FileWriter(self.acq.storage_buffer, self.buffer_lock, self.record_filepath, self.acq.sample_rate)
+            # Generate blink sequence for full duration
+            self._generate_random_blink_sequence(rec_duration)
+            self._random_blink_start_time = time.time()
+            self._schedule_next_blink()
         self.file_writer.start()
 
     def _split_filename(self):
@@ -481,6 +659,14 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             self.file_writer.stop()
             self.file_writer.join()
         self.acq.recording_start_timestamp = None
+        # Save LED event log if DI was used
+        if self.acq and self.acq.di_channel:
+            led_log_path = os.path.splitext(self.record_filepath)[0] + '_led_events.csv'
+            self.acq.save_led_event_log(led_log_path)
+            self.acq.led_event_log = []  # reset LED event list after saving
+        # Clean up random blink state
+        if hasattr(self, '_random_blink_events'):
+            del self._random_blink_events
         self.recordBtn.setEnabled(True)
         QtWidgets.QMessageBox.information(self, "Finished", "Recording complete")
 
@@ -522,6 +708,8 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
         self.specMaxEdit.setEnabled(True)
         self.specWindowEdit.setEnabled(True)
         self.specCheck.setEnabled(True)
+        self.doCombo.setEnabled(True)
+        self.diCombo.setEnabled(True)
 
     def reset_device(self):
         dev = self.daqCombo.currentText()
@@ -547,6 +735,18 @@ class DataAcquisitionGUI(QtWidgets.QWidget):
             except Exception as e:
                 print(f"Error stopping file writer: {e}")
         QtWidgets.qApp.quit()
+
+    def toggle_test_led(self):
+        """Toggle the digital output (LED) on/off for testing using set_led."""
+        if self.acq and hasattr(self.acq, 'set_led') and self.acq.do_task:
+            state = self.testLedBtn.isChecked()
+            self.acq.set_led(state)
+            if state:
+                self.testLedBtn.setText("Test LED (ON)")
+            else:
+                self.testLedBtn.setText("Test LED (OFF)")
+        else:
+            QtWidgets.QMessageBox.warning(self, "No DO Task", "Digital Output task is not initialized. Connect first and select a DO channel.")
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
