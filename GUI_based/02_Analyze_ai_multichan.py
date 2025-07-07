@@ -177,12 +177,24 @@ class AnalysisGUI:
         self.axes[0].set_ylabel("Amplitude (V)")
         self.axes[0].legend(loc="lower left")
 
-        # Plot instantaneous frequency for all channels
+        # Plot instantaneous frequency for all channels and annotate median
         threshold = self.threshold.get()
+        median_freqs = []
         for i, ch in enumerate(channel_cols):
             channel_data = detrend(self.data[ch])
             instant_freq, instant_time = self.inst_freq(channel_data, sample_rate, threshold)
             self.axes[1].plot(instant_time, instant_freq, '.', label=f"{ch}")
+            if len(instant_freq) > 0:
+                median_val = np.median(instant_freq)
+                median_freqs.append((ch, median_val))
+                # Annotate median on the plot near the right edge
+                self.axes[1].annotate(f"Median: {median_val:.2f} Hz", 
+                    xy=(instant_time[-1], median_val),
+                    xytext=(instant_time[-1], median_val),
+                    textcoords='data',
+                    fontsize=9, color=self.axes[1].lines[-1].get_color(),
+                    va='center', ha='right',
+                    bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.5))
         # self.axes[1].set_title("Instantaneous Frequency (all channels)")
         self.axes[1].set_ylabel("Inst. Freq. (Hz)")
         # self.axes[1].set_xlabel("Time (s)")
