@@ -35,6 +35,8 @@ class AnalysisGUI:
         Label(self.control_frame, text="End (s, 0=EOF):").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.end_time_s, width=8).pack(side="left", padx=5, pady=5)
         Button(self.control_frame, text="Load File", command=self.load_file).pack(side="left", padx=5, pady=5)
+        Label(self.control_frame, text="Threshold:").pack(side="left", padx=5, pady=5)
+        Entry(self.control_frame, textvariable=self.threshold, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec min freq:").pack(side="left", padx=5, pady=5)
         Entry(self.control_frame, textvariable=self.min_y, width=10).pack(side="left", padx=5, pady=5)
         Label(self.control_frame, text="Spec max freq:").pack(side="left", padx=5, pady=5)
@@ -158,8 +160,8 @@ class AnalysisGUI:
         total_samples = len(self.data)
         time_axis = np.arange(total_samples) / sample_rate
 
-        # Prepare figure and axes: 1 raw, 1 inst freq, n_channels spectrograms
-        n_rows = 2 + n_channels
+        # Prepare figure and axes: 1 raw, 1 inst freq, n_channels spectrograms, n_channels PSDs
+        n_rows = 2 + 2 * n_channels  # raw + inst_freq + spectrograms + PSDs
         if self.fig is not None:
             plt.close(self.fig)
         self.fig, self.axes = plt.subplots(n_rows, 1, figsize=(15, 3 * n_rows), squeeze=False)
@@ -202,8 +204,43 @@ class AnalysisGUI:
             # ax.set_title(f"Spectrogram: {ch}")
             ax.set_ylabel(f"{ch} Freq. (Hz)")
             ax.set_ylim(min_freq, max_freq)
-            if i == len(channel_cols) - 1:
-                ax.set_xlabel("Time (s)")
+            # Don't set xlabel for spectrograms anymore since PSDs will be below
+
+        # Plot PSD for each channel
+        for i, ch in enumerate(channel_cols):
+            channel_data = detrend(self.data[ch])
+            ax = self.axes[2 + n_channels + i]
+            
+            # Calculate PSD using the same parameters as spectrogram
+            from scipy.signal import welch
+            freqs, psd = welch(channel_data, fs=sample_rate, window=hanning_window, 
+                              nperseg=nfft_value, noverlap=noverlap_value)
+            
+            # Find peak in the frequency range of interest
+            freq_mask = (freqs >= min_freq) & (freqs <= max_freq)
+            if np.any(freq_mask):
+                freqs_roi = freqs[freq_mask]
+                psd_roi = psd[freq_mask]
+                peak_idx = np.argmax(psd_roi)
+                peak_freq = freqs_roi[peak_idx]
+                peak_power = psd_roi[peak_idx]
+                
+                # Plot PSD
+                ax.plot(freqs, 10 * np.log10(psd))
+                ax.axvline(peak_freq, color='red', linestyle='--', alpha=0.7)
+                ax.annotate(f'Peak: {peak_freq:.1f} Hz\n{10*np.log10(peak_power):.1f} dB', 
+                           xy=(peak_freq, 10*np.log10(peak_power)), 
+                           xytext=(peak_freq + (max_freq - min_freq) * 0.1, 10*np.log10(peak_power)),
+                           arrowprops=dict(arrowstyle='->', color='red', alpha=0.7),
+                           fontsize=8, color='red')
+                
+                ax.set_xlim(min_freq, max_freq)
+                ax.set_ylabel(f"{ch} PSD (dB/Hz)")
+                ax.grid(True, alpha=0.3)
+                
+                # Set xlabel only for the last PSD plot
+                if i == len(channel_cols) - 1:
+                    ax.set_xlabel("Frequency (Hz)")
 
         self.fig.tight_layout()
 
